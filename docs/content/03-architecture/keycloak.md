@@ -11,6 +11,16 @@
 5. Create a test user called `ump`, set its password to `ump`
 6. Make sure to set the keycloak host in `.env` to your local hostname or IP address
 
+The development docker setup already imports `keycloak-example-conf.json` into
+the `UrbanModelPlatform` realm. The file includes these test users (all with
+password `ump`):
+
+- `ump` (role `modelserver` on client `ump-client`, access to all configured
+	`modelserver:*` processes)
+- `ump-sqrt` (role `modelserver_squareroot`)
+- `ump-geo` (role `modelserver_hello-geo-world`)
+- `ump-viewer` (no UMP process roles)
+
 ## Securing Model Servers and Processes
 
 You can secure processes and model servers in keycloak by adding users to special client roles. In order to secure a specific process, create a role named `modelserver_processid`, in order to secure all processes of a model server just create a role named `modelserver`. The ids correspond to the keys used in the providers.yaml.

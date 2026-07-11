@@ -310,6 +310,33 @@
         ],
         "ump-client": [
           {
+            "id": "f2b7a31d-d15d-4758-8ebf-3dafe2f64201",
+            "name": "modelserver",
+            "description": "Access to all configured modelserver processes",
+            "composite": false,
+            "clientRole": true,
+            "containerId": "b55a869c-4dcb-4db6-99c1-db8d716b59c0",
+            "attributes": {}
+          },
+          {
+            "id": "f8a5ea6e-357f-49df-bc39-c8f6ab66f2fb",
+            "name": "modelserver_hello-world",
+            "description": "Access to modelserver:hello-world",
+            "composite": false,
+            "clientRole": true,
+            "containerId": "b55a869c-4dcb-4db6-99c1-db8d716b59c0",
+            "attributes": {}
+          },
+          {
+            "id": "13a1b7a2-ef6d-4a20-84c0-59e65f6b26fb",
+            "name": "modelserver_hello-geo-world",
+            "description": "Access to modelserver:hello-geo-world",
+            "composite": false,
+            "clientRole": true,
+            "containerId": "b55a869c-4dcb-4db6-99c1-db8d716b59c0",
+            "attributes": {}
+          },
+          {
             "id": "0e33f043-9a4b-402d-8883-a832e09f668b",
             "name": "modelserver_squareroot",
             "description": "",
@@ -2139,6 +2166,82 @@
         "alias": "review profile config",
         "config": {
           "update.profile.on.first.login": "missing"
+        }
+      }
+    ],
+    "users": [
+      {
+        "username": "ump",
+        "enabled": true,
+        "emailVerified": true,
+        "firstName": "UMP",
+        "lastName": "AllProcesses",
+        "credentials": [
+          {
+            "type": "password",
+            "value": "ump",
+            "temporary": false
+          }
+        ],
+        "clientRoles": {
+          "ump-client": [
+            "modelserver"
+          ]
+        }
+      },
+      {
+        "username": "ump-sqrt",
+        "enabled": true,
+        "emailVerified": true,
+        "firstName": "UMP",
+        "lastName": "SquareRootOnly",
+        "credentials": [
+          {
+            "type": "password",
+            "value": "ump",
+            "temporary": false
+          }
+        ],
+        "clientRoles": {
+          "ump-client": [
+            "modelserver_squareroot"
+          ]
+        }
+      },
+      {
+        "username": "ump-geo",
+        "enabled": true,
+        "emailVerified": true,
+        "firstName": "UMP",
+        "lastName": "GeoOnly",
+        "credentials": [
+          {
+            "type": "password",
+            "value": "ump",
+            "temporary": false
+          }
+        ],
+        "clientRoles": {
+          "ump-client": [
+            "modelserver_hello-geo-world"
+          ]
+        }
+      },
+      {
+        "username": "ump-viewer",
+        "enabled": true,
+        "emailVerified": true,
+        "firstName": "UMP",
+        "lastName": "NoRoles",
+        "credentials": [
+          {
+            "type": "password",
+            "value": "ump",
+            "temporary": false
+          }
+        ],
+        "clientRoles": {
+          "ump-client": []
         }
       }
     ],
