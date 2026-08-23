@@ -28,6 +28,7 @@ from ump.api.providers import PROVIDERS
 from ump.api.routes.ensembles import ensembles
 from ump.api.routes.health import health_bp
 from ump.api.routes.jobs import jobs
+from ump.api.routes.mcp import mcp
 from ump.api.routes.processes import processes
 from ump.api.routes.users import users
 from ump.config import app_settings as config
@@ -90,11 +91,14 @@ def cleanup():
             )
             if result_storage == "geoserver":
                 from ump.geoserver.geoserver import Geoserver
+
                 geoserver = Geoserver()
                 try:
                     geoserver.delete_job_results(job_id)
                 except Exception as e:
-                    logging.error(f"Failed to cleanup geoserver results for job {job_id}: {e}")
+                    logging.error(
+                        f"Failed to cleanup geoserver results for job {job_id}: {e}"
+                    )
 
 
 # TODO: this is NOT good for production environments!
@@ -124,6 +128,7 @@ api.register_blueprint(jobs, url_prefix="/jobs")
 api.register_blueprint(ensembles, url_prefix="/ensembles")
 api.register_blueprint(users, url_prefix="/users")
 api.register_blueprint(health_bp, url_prefix="/health")
+api.register_blueprint(mcp, url_prefix="/mcp")
 
 app.register_blueprint(api)
 
@@ -143,7 +148,7 @@ def handle_ogc_exception(error: OGCProcessException):
     response.content_type = "application/problem+json"
 
     if response.status_code in (401, 403):
-        response.headers["WWW-Authenticate"] = 'Bearer'
+        response.headers["WWW-Authenticate"] = "Bearer"
     return response
 
 
