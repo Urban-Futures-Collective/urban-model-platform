@@ -57,7 +57,7 @@ services:
       - prod
     depends_on:
       - api-db
-      - keycloak
+  #    - keycloak
 
   api-db:
     image: postgis/postgis:14-3.3
