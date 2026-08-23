@@ -11,7 +11,7 @@ networks:
 volumes:
   postgres_data:
   geoserver_postgres_data:
-  kc-db_data:
+# kc-db_data:
   geoserver_data:
 
 services:
@@ -31,7 +31,7 @@ services:
       UMP_PROVIDERS_FILE: /home/pythonuser/providers.yaml
       UMP_KEYCLOAK_USER: ${UMP_KEYCLOAK_USER:-admin}
       UMP_KEYCLOAK_PASSWORD: ${UMP_KEYCLOAK_PASSWORD:-admin}
-      UMP_KEYCLOAK_URL: http://keycloak:8080/auth
+      UMP_KEYCLOAK_URL: ${UMP_KEYCLOAK_URL:-http://keycloak:8080/auth}
       UMP_KEYCLOAK_CLIENT_ID: ${UMP_KEYCLOAK_CLIENT_ID:-ump-client}
       UMP_KEYCLOAK_REALM: ${UMP_KEYCLOAK_REALM:-UrbanModelPlatform}
       UMP_DATABASE_NAME: ${UMP_DATABASE_NAME:-ump}
@@ -42,7 +42,7 @@ services:
       UMP_GEOSERVER_WORKSPACE_NAME: ${UMP_GEOSERVER_WORKSPACE_NAME:-UMP}
       UMP_GEOSERVER_USER: ${UMP_GEOSERVER_USER:-admin}
       UMP_GEOSERVER_PASSWORD: ${UMP_GEOSERVER_PASSWORD:-geoserver}
-      UMP_GEOSERVER_URL: http://geoserver:8080/geoserver
+      UMP_GEOSERVER_URL: ${UMP_GEOSERVER_URL:-http://geoserver:8080/geoserver}
       # Using dedicated database for geoserver results in production
       UMP_GEOSERVER_DB_PORT: 5432
       UMP_GEOSERVER_DB_NAME: ${UMP_GEOSERVER_DB_NAME:-geoserver_results}
@@ -109,39 +109,39 @@ services:
       - prod
 
       
-  keycloak:
-    image: quay.io/keycloak/keycloak:25.0
-    restart: "unless-stopped"
-    ports: 
-      - ${KEYCLOAK_PORT_EXTERNAL:-8282}:8080
-    environment:
-      KEYCLOAK_ADMIN: ${UMP_KEYCLOAK_USER:-admin}
-      KEYCLOAK_ADMIN_PASSWORD: ${UMP_KEYCLOAK_PASSWORD:-admin}
-      KC_DB: postgres
-      KC_DB_URL_HOST: kc-db
-      KC_DB_URL_PORT: 5432
-      KC_DB_URL_DATABASE: keycloak
-      KC_DB_USERNAME: ${UMP_KEYCLOAK_DB_USER:-keycloak}
-      KC_DB_PASSWORD: ${UMP_KEYCLOAK_DB_PASSWORD:-keycloak}
-      KC_HOSTNAME: ${UMP_KEYCLOAK_HOSTNAME:-localhost}
-      KC_HOSTNAME_PATH: /auth
-      KC_HTTP_RELATIVE_PATH: /auth
-    depends_on:
-      - kc-db
-    command: ['start', '--proxy-headers', 'xforwarded', '--http-enabled', 'true']
-    networks:
-      - prod
+  #keycloak:
+  #  image: quay.io/keycloak/keycloak:25.0
+  #  restart: "unless-stopped"
+  #  ports: 
+  #    - ${KEYCLOAK_PORT_EXTERNAL:-8282}:8080
+  #  environment:
+  #    KEYCLOAK_ADMIN: ${UMP_KEYCLOAK_USER:-admin}
+  #    KEYCLOAK_ADMIN_PASSWORD: ${UMP_KEYCLOAK_PASSWORD:-admin}
+  #    KC_DB: postgres
+  #    KC_DB_URL_HOST: kc-db
+  #    KC_DB_URL_PORT: 5432
+  #    KC_DB_URL_DATABASE: keycloak
+  #    KC_DB_USERNAME: ${UMP_KEYCLOAK_DB_USER:-keycloak}
+  #    KC_DB_PASSWORD: ${UMP_KEYCLOAK_DB_PASSWORD:-keycloak}
+  #    KC_HOSTNAME: ${UMP_KEYCLOAK_HOSTNAME:-localhost}
+  #    KC_HOSTNAME_PATH: /auth
+  #    KC_HTTP_RELATIVE_PATH: /auth
+  #  depends_on:
+  #    - kc-db
+  #  command: ['start', '--proxy-headers', 'xforwarded', '--http-enabled', 'true']
+  #  networks:
+  #    - prod
 
-  kc-db:
-    image: postgis/postgis:14-3.3
-    restart: "unless-stopped"
-    volumes:
-      - kc-db_data:/var/lib/postgresql/data/
-    environment:
-      POSTGRES_DB: keycloak
-      POSTGRES_USER: ${UMP_KEYCLOAK_DB_USER:-keycloak}
-      POSTGRES_PASSWORD: ${UMP_KEYCLOAK_DB_PASSWORD:-keycloak}
-    expose:
-      - 5432
-    networks:
-      - prod
+  #kc-db:
+  #  image: postgis/postgis:14-3.3
+  #  restart: "unless-stopped"
+  #  volumes:
+  #    - kc-db_data:/var/lib/postgresql/data/
+  #  environment:
+  #    POSTGRES_DB: keycloak
+  #    POSTGRES_USER: ${UMP_KEYCLOAK_DB_USER:-keycloak}
+  #    POSTGRES_PASSWORD: ${UMP_KEYCLOAK_DB_PASSWORD:-keycloak}
+  #  expose:
+  #    - 5432
+  #  networks:
+ #     - prod
