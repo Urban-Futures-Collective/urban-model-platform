@@ -26,7 +26,9 @@ from ump.core.models.execute_request import ExecuteRequest
 from ump.core.models.job import JobList, JobStatusInfo
 from ump.core.models.ogcp_exception import OGCExceptionResponse
 from ump.core.models.process import Process, ProcessList
+from ump.adapters.web.mcp import create_mcp_router
 from ump.core.services.authorization import AuthorizationService
+from ump.core.services.tool_catalog import ToolCatalogService
 from ump.core.settings import app_settings, logger
 
 
@@ -119,6 +121,8 @@ def create_app(
     auth_port: AuthPort | None = None,
     authorization_service: AuthorizationService | None = None,
     site_info: SiteInfoPort | None = None,
+    tool_catalog_factory: Callable[[ProcessManager], ToolCatalogService]
+    | None = None,
 ):
     """Create the FastAPI app.
 
@@ -152,6 +156,11 @@ def create_app(
             app.state.job_repo = job_repo
             app.state.auth_port = auth_port
             app.state.authz = authorization_service
+            app.state.tool_catalog = (
+                tool_catalog_factory(process_port)
+                if tool_catalog_factory is not None
+                else None
+            )
 
             # Re-schedule poll loops for any non-terminal jobs that were left
             # running by a previously crashed or restarted instance.
@@ -458,6 +467,19 @@ def create_app(
     # Mount the router under each supported version prefix
     for ver in getattr(app_settings, "UMP_SUPPORTED_API_VERSIONS", ["1.0"]):
         app.include_router(api_router, prefix=f"/v{ver}")
+
+    # MCP tool catalog — mounted outside the OGC version prefixes on purpose:
+    # the OGC surface is standardised and untouched, and the catalog contract
+    # versions independently (see reports/REF-F10-mcp-endpoint.md).
+    if tool_catalog_factory is not None:
+        app.include_router(
+            create_mcp_router(
+                get_auth=_get_auth,
+                auth_enabled=lambda: app.state.auth_port is not None
+                and app_settings.UMP_AUTH_ENABLED,
+            ),
+            prefix="/mcp",
+        )
 
     # Dedicated route for the landing CSS. This is a robust fallback for environments
     # where StaticFiles mounting might not be available (packaged apps, different cwd).

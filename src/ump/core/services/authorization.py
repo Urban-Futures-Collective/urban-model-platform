@@ -36,6 +36,23 @@ class AuthorizationService:
     def __init__(self, providers: ProvidersPort) -> None:
         self._providers = providers
 
+    def can_access_process(self, auth: AuthContext, process_id: str) -> bool:
+        """Whether *auth* may use *process_id*, as a plain predicate.
+
+        This is the single implementation of the access rules. Callers that need
+        to *enforce* access use ``check_process_access``; callers that need to
+        *filter* a list (the MCP tool catalog) use this directly, so that the
+        role model is never duplicated — see reports/REF-F10-mcp-endpoint.md.
+        """
+        if self._is_anonymous_process(process_id):
+            return True
+
+        if not auth.is_authenticated:
+            return False
+
+        provider_name = self._provider_of(process_id)
+        return provider_name in auth.roles or process_id in auth.roles
+
     def check_process_access(self, auth: AuthContext, process_id: str) -> None:
         """Allow or deny execution of *process_id* for *auth*.
 
@@ -43,7 +60,7 @@ class AuthorizationService:
         with status 401 (unauthenticated) or 403 (authenticated but lacking the
         required role) otherwise.
         """
-        if self._is_anonymous_process(process_id):
+        if self.can_access_process(auth, process_id):
             return
 
         if not auth.is_authenticated:
@@ -58,9 +75,6 @@ class AuthorizationService:
             )
 
         provider_name = self._provider_of(process_id)
-        if provider_name in auth.roles or process_id in auth.roles:
-            return
-
         raise OGCProcessException(
             OGCExceptionResponse(
                 type="about:blank",

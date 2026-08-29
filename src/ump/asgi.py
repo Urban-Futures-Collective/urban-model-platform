@@ -37,6 +37,7 @@ from ump.core.managers.observers import (
 )
 from ump.core.managers.process_manager import ProcessManager
 from ump.core.services.authorization import AuthorizationService
+from ump.core.services.tool_catalog import ToolCatalogService
 from ump.core.settings import app_settings, set_logger
 
 # ---------------------------------------------------------------------------
@@ -87,6 +88,15 @@ def _process_manager_factory(client):
     )
 
 
+def _tool_catalog_factory(process_manager):
+    """Core service behind GET /mcp/tools (reports/REF-F10-mcp-endpoint.md)."""
+    return ToolCatalogService(
+        process_manager=process_manager,
+        authorization_service=authorization_service,
+        process_id_validator=process_id_validator,
+    )
+
+
 def _job_manager_factory(client, process_manager):
     job_config = JobManagerConfig.from_app_settings(app_settings)
     retry_adapter = TenacityRetryAdapter(
@@ -127,6 +137,7 @@ http_client = AioHttpClientAdapter()
 process_id_validator = ColonProcessId()
 remote_auth = RemoteAuthAdapter()
 jwt_auth = JwtAuthAdapter(app_settings)
+authorization_service = AuthorizationService(providers_port)
 
 if app_settings.UMP_JOB_STORE == "postgres":
     from ump.adapters.job_repository_sql import SQLModelJobRepository
@@ -153,6 +164,7 @@ app = create_app(
     job_repo=job_repo,
     process_id_validator=process_id_validator,
     auth_port=jwt_auth,
-    authorization_service=AuthorizationService(providers_port),
+    authorization_service=authorization_service,
     site_info=StaticSiteInfoAdapter(),
+    tool_catalog_factory=_tool_catalog_factory,
 )
