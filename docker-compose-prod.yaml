@@ -1,5 +1,9 @@
-# This is an example production file for the Urban Model Platform
-# It does not (!) include a reverse proxy configuration, a nginx setup, or other specific production setups
+# Production compose for Urban Model Platform v3.
+# It does not (!) include a reverse proxy configuration, a nginx setup, or other
+# specific production setups.
+#
+# Migrating from v2 (2.2.x)? Read the notes marked "v3 CHANGE" below and the
+# breaking-change list in .env.example — several of them fail silently.
 
 
 networks:
@@ -9,10 +13,13 @@ networks:
     external: true
 
 volumes:
-  postgres_data:
-  geoserver_postgres_data:
-  kc-db_data:
-  geoserver_data:
+  # v3 CHANGE: new volume name. v3 owns its own Alembic lineage (0001/0002),
+  # while the v2 database carries revisions 1.0.x in alembic_version. Pointing
+  # v3 at the old volume makes `ump-migrate upgrade head` abort with
+  # "Can't locate revision identified by '1.0.x'" and the container crash-loops.
+  # A fresh volume is required; the old one is left untouched and can be removed
+  # with `docker volume rm <project>_postgres_data` once the deploy is verified.
+  ump_v3_postgres_data:
 
 services:
   api:
@@ -22,48 +29,66 @@ services:
     image: ${CONTAINER_REGISTRY:-local}/${IMAGE_NAME:-urban-model-platform}:${IMAGE_TAG:-latest}
     restart: "unless-stopped"
     ports:
-      - ${WEBAPP_PORT_EXTERNAL:-5003}:5000
+      # v3 CHANGE: the app listens on 8000 (uvicorn), not 5000 (Flask/gunicorn).
+      - ${WEBAPP_PORT_EXTERNAL:-5003}:8000
     environment:
-      UMP_API_SERVER_URL: ${UMP_API_SERVER_URL:-localhost:5000}
+      # ── Server ────────────────────────────────────────────────────────────
+      # Public base URL, used to build self/results links in job responses.
+      UMP_API_SERVER_URL: ${UMP_API_SERVER_URL:-http://localhost:5003/}
+      UMP_API_SERVER_HOST: 0.0.0.0
+      UMP_API_SERVER_PORT: 8000
       UMP_API_SERVER_WORKERS: ${UMP_API_SERVER_WORKERS:-1}
-      UMP_SERVER_TIMEOUT: ${UMP_SERVER_TIMEOUT:-30}
       UMP_LOG_LEVEL: ${UMP_LOG_LEVEL:-INFO}
-      UMP_PROVIDERS_FILE: /home/pythonuser/providers.yaml
-      UMP_KEYCLOAK_USER: ${UMP_KEYCLOAK_USER:-admin}
-      UMP_KEYCLOAK_PASSWORD: ${UMP_KEYCLOAK_PASSWORD:-admin}
-      UMP_KEYCLOAK_URL: http://keycloak:8080/auth
-      UMP_KEYCLOAK_CLIENT_ID: ${UMP_KEYCLOAK_CLIENT_ID:-ump-client}
-      UMP_KEYCLOAK_REALM: ${UMP_KEYCLOAK_REALM:-UrbanModelPlatform}
+      UMP_PROVIDERS_FILE: ${UMP_PROVIDERS_FILE:-/home/pythonuser/providers.yaml}
+      # v3 CHANGE: this no longer mounts the API. Routes are served at /v1.0/…
+      # regardless; the prefix only decorates links. See .env.example.
+      UMP_API_SERVER_URL_PREFIX: ${UMP_API_SERVER_URL_PREFIX:-/}
+
+      # ── Job store ─────────────────────────────────────────────────────────
+      # v3 CHANGE: REQUIRED. Without it the default is "memory": jobs would live
+      # in the process, the database would go unused, and the container would
+      # most likely fail at startup trying to create ./scratch under /app.
+      UMP_JOB_STORE: ${UMP_JOB_STORE:-postgres}
       UMP_DATABASE_NAME: ${UMP_DATABASE_NAME:-ump}
       UMP_DATABASE_USER: ${UMP_DATABASE_USER:-ump}
       UMP_DATABASE_PASSWORD: ${UMP_DATABASE_PASSWORD:-ump}
       UMP_DATABASE_HOST: api-db
       UMP_DATABASE_PORT: 5432
-      UMP_GEOSERVER_WORKSPACE_NAME: ${UMP_GEOSERVER_WORKSPACE_NAME:-UMP}
-      UMP_GEOSERVER_USER: ${UMP_GEOSERVER_USER:-admin}
-      UMP_GEOSERVER_PASSWORD: ${UMP_GEOSERVER_PASSWORD:-geoserver}
-      UMP_GEOSERVER_URL: http://geoserver:8080/geoserver
-      # Using dedicated database for geoserver results in production
-      UMP_GEOSERVER_DB_PORT: 5432
-      UMP_GEOSERVER_DB_NAME: ${UMP_GEOSERVER_DB_NAME:-geoserver_results}
-      UMP_GEOSERVER_DB_USER: ${UMP_GEOSERVER_DB_USER:-geoserver}
-      UMP_GEOSERVER_DB_PASSWORD: ${UMP_GEOSERVER_DB_PASSWORD:-geoserver}
-      UMP_GEOSERVER_DB_HOST: geoserver-db
-      UMP_GEOSERVER_CONNECTION_TIMEOUT: ${UMP_GEOSERVER_CONNECTION_TIMEOUT:-60}
+
+      # ── Remote job handling ───────────────────────────────────────────────
+      UMP_REMOTE_JOB_STATUS_REQUEST_INTERVAL: ${UMP_REMOTE_JOB_STATUS_REQUEST_INTERVAL:-5}
+      UMP_VERIFY_REMOTE_RESULTS: ${UMP_VERIFY_REMOTE_RESULTS:-True}
+      UMP_RESULTS_FETCH_TIMEOUT: ${UMP_RESULTS_FETCH_TIMEOUT:-30}
       UMP_JOB_DELETE_INTERVAL: ${UMP_JOB_DELETE_INTERVAL:-240}
+
+      # ── Auth (external Keycloak) ──────────────────────────────────────────
+      # v3 CHANGE: UMP_KEYCLOAK_* are gone. UMP validates JWTs offline against
+      # the IdP's JWKS endpoint and never talks to Keycloak's admin API.
+      UMP_AUTH_ENABLED: ${UMP_AUTH_ENABLED:-True}
+      UMP_JWKS_URL: ${UMP_JWKS_URL}
+      UMP_JWT_ISSUER: ${UMP_JWT_ISSUER}
+      UMP_JWT_AUDIENCE: ${UMP_JWT_AUDIENCE}
+      UMP_JWT_ROLES_CLAIMS: ${UMP_JWT_ROLES_CLAIMS:-realm_access.roles}
+      UMP_JWKS_CACHE_TTL_SECONDS: ${UMP_JWKS_CACHE_TTL_SECONDS:-3600}
+      UMP_PUBLIC_PROCESSES: ${UMP_PUBLIC_PROCESSES:-False}
+
+      # ── CORS ──────────────────────────────────────────────────────────────
+      # v3 CHANGE: v2 enabled CORS for all origins unconditionally. v3 emits no
+      # CORS headers unless this is set. JSON list syntax, e.g.
+      # UMP_CORS_ORIGINS=["https://frontend.example.org"]
+      UMP_CORS_ORIGINS: ${UMP_CORS_ORIGINS:-[]}
     volumes:
-      - ./providers.yaml:/home/pythonuser/providers.yaml
+      - ../files/providers.yaml:/home/pythonuser/providers.yaml
     networks:
       - prod
     depends_on:
       - api-db
-      - keycloak
 
   api-db:
     image: postgis/postgis:14-3.3
     restart: "unless-stopped"
     volumes:
-      - postgres_data:/var/lib/postgresql/data/
+      - ump_v3_postgres_data:/var/lib/postgresql/data/
     environment:
       POSTGRES_DB: ${UMP_DATABASE_NAME}
       POSTGRES_USER: ${UMP_DATABASE_USER}
@@ -73,75 +98,9 @@ services:
     networks:
       - prod
 
-  # Separate PostGIS database for Geoserver results in production
-  geoserver-db:
-    image: postgis/postgis:14-3.3
-    restart: "unless-stopped"
-    volumes:
-      - geoserver_postgres_data:/var/lib/postgresql/data/
-    environment:
-      POSTGRES_DB: ${UMP_GEOSERVER_DB_NAME:-geoserver_results}
-      POSTGRES_USER: ${UMP_GEOSERVER_DB_USER:-geoserver}
-      POSTGRES_PASSWORD: ${UMP_GEOSERVER_DB_PASSWORD:-geoserver}
-    expose:
-      - 5432
-    networks:
-      - prod
-
-  geoserver:
-    image: kartoza/geoserver:2.22.0
-    restart: "unless-stopped"
-    ports:
-      - ${GEOSERVER_PORT_EXTERNAL:-8181}:8080
-    volumes:
-      - geoserver_data:/opt/geoserver/data_dir
-    environment:
-      GEOSERVER_ADMIN_USER: ${UMP_GEOSERVER_USER}
-      GEOSERVER_ADMIN_PASSWORD: ${UMP_GEOSERVER_PASSWORD}
-      # Production: Using dedicated database for Geoserver
-      HOST: geoserver-db
-      POSTGRES_DB: ${UMP_GEOSERVER_DB_NAME:-geoserver_results}
-      POSTGRES_USER: ${UMP_GEOSERVER_DB_USER:-geoserver}
-      POSTGRES_PASS: ${UMP_GEOSERVER_DB_PASSWORD:-geoserver}
-    depends_on:
-      - geoserver-db
-    networks:
-      - prod
-
-      
-  keycloak:
-    image: quay.io/keycloak/keycloak:25.0
-    restart: "unless-stopped"
-    ports: 
-      - ${KEYCLOAK_PORT_EXTERNAL:-8282}:8080
-    environment:
-      KEYCLOAK_ADMIN: ${UMP_KEYCLOAK_USER:-admin}
-      KEYCLOAK_ADMIN_PASSWORD: ${UMP_KEYCLOAK_PASSWORD:-admin}
-      KC_DB: postgres
-      KC_DB_URL_HOST: kc-db
-      KC_DB_URL_PORT: 5432
-      KC_DB_URL_DATABASE: keycloak
-      KC_DB_USERNAME: ${UMP_KEYCLOAK_DB_USER:-keycloak}
-      KC_DB_PASSWORD: ${UMP_KEYCLOAK_DB_PASSWORD:-keycloak}
-      KC_HOSTNAME: ${UMP_KEYCLOAK_HOSTNAME:-localhost}
-      KC_HOSTNAME_PATH: /auth
-      KC_HTTP_RELATIVE_PATH: /auth
-    depends_on:
-      - kc-db
-    command: ['start', '--proxy-headers', 'xforwarded', '--http-enabled', 'true']
-    networks:
-      - prod
-
-  kc-db:
-    image: postgis/postgis:14-3.3
-    restart: "unless-stopped"
-    volumes:
-      - kc-db_data:/var/lib/postgresql/data/
-    environment:
-      POSTGRES_DB: keycloak
-      POSTGRES_USER: ${UMP_KEYCLOAK_DB_USER:-keycloak}
-      POSTGRES_PASSWORD: ${UMP_KEYCLOAK_DB_PASSWORD:-keycloak}
-    expose:
-      - 5432
-    networks:
-      - prod
+  # Geoserver and its database are intentionally absent: v3 has no result-storage
+  # implementation yet, so nothing would write to them. Result storage arrives via
+  # the ldproxy work on v3.0.0.alpha/result-storage (Feature V).
+  #
+  # Keycloak is intentionally absent: this deployment uses an externally managed
+  # instance, configured through UMP_JWKS_URL / UMP_JWT_ISSUER above.
