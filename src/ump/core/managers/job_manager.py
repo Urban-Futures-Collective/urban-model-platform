@@ -38,6 +38,7 @@ from ump.core.models.link import Link
 from ump.core.models.ogcp_exception import OGCExceptionResponse
 from ump.core.models.providers_config import ProviderConfig
 from ump.core.settings import logger
+from ump.core.utils.api_paths import api_base
 
 REQUIRED_STATUS_FIELDS = {"jobID", "status", "type"}
 
@@ -133,7 +134,7 @@ class JobExecutionContext(BaseModel):
             job_id=job_id,
             status_info=self.status_info,
             response_status=201,
-            response_headers={"Location": f"/jobs/{job_id}"},
+            response_headers={"Location": f"{api_base()}/jobs/{job_id}"},
             response_body=body,
         )
 
@@ -413,7 +414,7 @@ class JobManager:
 
         accepted_si.links = [
             Link(
-                href=f"/jobs/{job.id}",
+                href=f"{api_base()}/jobs/{job.id}",
                 rel="self",
                 type="application/json",
                 title="Job status",
@@ -660,7 +661,7 @@ class JobManager:
 
         return {
             "status": upstream_status,
-            "headers": {"Location": f"/jobs/{job.id}"},
+            "headers": {"Location": f"{api_base()}/jobs/{job.id}"},
             "body": upstream_body
             if isinstance(upstream_body, (dict, list))
             else {"error": str(upstream_body)},
@@ -670,7 +671,7 @@ class JobManager:
         self, job_id: str, status_info: Optional[JobStatusInfo]
     ) -> Dict[str, Any]:
         body = status_info.model_dump() if status_info else {}
-        return {"status": 201, "headers": {"Location": f"/jobs/{job_id}"}, "body": body}
+        return {"status": 201, "headers": {"Location": f"{api_base()}/jobs/{job_id}"}, "body": body}
 
     async def _verify_remote_results(
         self, provider: Any, process_id: str, remote_job_id: str
@@ -1138,7 +1139,7 @@ class JobManager:
         if any(l.rel == "results" for l in existing):
             return
         results_link = Link(
-            href=f"/jobs/{job_id}/results",
+            href=f"{api_base()}/jobs/{job_id}/results",
             rel="results",
             type="application/json",
             title="Job results",
@@ -1159,7 +1160,7 @@ class JobManager:
             status_info.links = filtered
             return
         self_link = Link(
-            href=f"/jobs/{job_id}",
+            href=f"{api_base()}/jobs/{job_id}",
             rel="self",
             type="application/json",
             title="Job status",

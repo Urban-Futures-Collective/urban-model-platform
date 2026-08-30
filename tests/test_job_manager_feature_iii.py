@@ -32,6 +32,8 @@ from datetime import datetime, timezone
 
 import pytest
 
+from ump.core.utils.api_paths import api_base
+
 from ump.adapters.job_repository_inmemory import InMemoryJobRepository
 from ump.adapters.retry_tenacity import TenacityRetryAdapter
 from ump.core.config import JobManagerConfig
@@ -274,8 +276,8 @@ async def test_immediate_results_synthesis_success():
     # Ensure links contain local self and results
     assert job.status_info.links is not None, "links should be present"
     hrefs = {l.href for l in job.status_info.links}
-    assert f"/jobs/{job.id}" in hrefs
-    assert f"/jobs/{job.id}/results" in hrefs
+    assert f"{api_base()}/jobs/{job.id}" in hrefs
+    assert f"{api_base()}/jobs/{job.id}/results" in hrefs
     # No remote status polling scheduled (no remote_status_url synthesized)
     assert job.remote_status_url is None
 
@@ -353,8 +355,8 @@ async def test_link_normalization_replaces_remote_ids():
     assert job.status_info.jobID == job.id
     assert job.status_info.links is not None, "links should be present"
     hrefs = {link.href for link in job.status_info.links}
-    assert f"/jobs/{job.id}" in hrefs
-    assert f"/jobs/{job.id}/results" in hrefs
+    assert f"{api_base()}/jobs/{job.id}" in hrefs
+    assert f"{api_base()}/jobs/{job.id}/results" in hrefs
     # Ensure remote provider links are removed
     assert not any(h.startswith("http://provider.test/jobs/remote-XYZ") for h in hrefs)
 

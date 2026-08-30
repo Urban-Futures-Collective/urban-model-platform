@@ -45,6 +45,7 @@ from ump.core.models.job import Job, JobStatusInfo, StatusCode
 from ump.core.models.link import Link
 from ump.core.models.ogcp_exception import OGCExceptionResponse
 from ump.core.settings import logger
+from ump.core.utils.api_paths import api_base
 
 REQUIRED_STATUS_FIELDS = {"jobID", "status", "type"}
 
@@ -98,7 +99,7 @@ def _ensure_self_link(job_id: str, status_info: JobStatusInfo) -> None:
         return
     status_info.links = filtered + [
         Link(
-            href=f"/jobs/{job_id}",
+            href=f"{api_base()}/jobs/{job_id}",
             rel="self",
             type="application/json",
             title="Job status",
@@ -114,7 +115,7 @@ def _ensure_results_link(job_id: str, status_info: JobStatusInfo) -> None:
         return
     status_info.links = existing + [
         Link(
-            href=f"/jobs/{job_id}/results",
+            href=f"{api_base()}/jobs/{job_id}/results",
             rel="results",
             type="application/json",
             title="Job results",
@@ -351,7 +352,7 @@ class PersistAcceptedStep(PipelineStep):
             progress=0,
             links=[
                 Link(
-                    href=f"/jobs/{context.job.id}",
+                    href=f"{api_base()}/jobs/{context.job.id}",
                     rel="self",
                     type="application/json",
                     title="Job status",
@@ -508,7 +509,7 @@ class HandleProviderResponseStep(PipelineStep):
         )
         context.response = {
             "status": upstream_status,
-            "headers": {"Location": f"/jobs/{context.job.id}"},
+            "headers": {"Location": f"{api_base()}/jobs/{context.job.id}"},
             "body": body,
         }
         context.should_halt = True
@@ -650,7 +651,7 @@ class ShapeClientResponseStep(PipelineStep):
         # The accepted snapshot lets the client poll for the true final status.
         context.response = {
             "status": 201,
-            "headers": {"Location": f"/jobs/{context.job.id}"},
+            "headers": {"Location": f"{api_base()}/jobs/{context.job.id}"},
             "body": context.accepted_si.model_dump(),
         }
         logger.debug(
@@ -709,7 +710,7 @@ def _halt_with_accepted(context: JobExecutionContext) -> None:
     if context.job and context.accepted_si:
         context.response = {
             "status": 201,
-            "headers": {"Location": f"/jobs/{context.job.id}"},
+            "headers": {"Location": f"{api_base()}/jobs/{context.job.id}"},
             "body": context.accepted_si.model_dump(),
         }
     context.should_halt = True
