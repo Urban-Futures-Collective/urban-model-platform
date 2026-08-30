@@ -14,67 +14,89 @@ services:
   # !NOTE: this is for testing the current app version in a container, only!
   # development is executed locally
   # and the prod deployment differs anyway!
-  api:
+  ump:
     image: ${CONTAINER_REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}
     restart: "unless-stopped"
     ports:
-      - ${WEBAPP_PORT_EXTERNAL}:5000
+      - ${WEBAPP_PORT_EXTERNAL}:8000
     environment:
-      UMP_API_SERVER_URL: localhost:${WEBAPP_PORT_EXTERNAL}
-      UMP_API_SERVER_WORKERS: 1
-      UMP_SERVER_TIMEOUT: 30 # seconds
+      PYTHONUNBUFFERED: 1
       UMP_LOG_LEVEL: DEBUG
-      UMP_PROVIDERS_FILE: /home/pythonuser/providers.yaml
-      UMP_KEYCLOAK_USER: admin
-      UMP_KEYCLOAK_PASSWORD: admin
-      UMP_KEYCLOAK_URL: http://keycloak:8080/auth
-      UMP_KEYCLOAK_CLIENT_ID: ump-client
-      UMP_KEYCLOAK_REALM: UrbanModelPlatform
+      UMP_PROVIDERS_FILE: /app/providers.yaml
+      UMP_API_SERVER_URL: "http://localhost:8000/"
+      UMP_API_SERVER_URL_PREFIX: "/"
+      UMP_API_SERVER_HOST: "0.0.0.0"
+      UMP_API_SERVER_PORT: 8000
+      UMP_API_SERVER_WORKERS: 1
+      UMP_REMOTE_JOB_STATUS_REQUEST_INTERVAL: 5
+      UMP_REMOTE_JOB_TTW: 900
+      UMP_JOB_STORE: "postgres"
+      UMP_JOB_DELETE_INTERVAL: 240
+      #
+      UMP_DATABASE_URL: postgresql+asyncpg://ump:ump@ump-db:5432/ump
       UMP_DATABASE_NAME: ump
+      UMP_DATABASE_HOST: ump-db
+      UMP_DATABASE_PORT: 5432
       UMP_DATABASE_USER: ump
       UMP_DATABASE_PASSWORD: ump
-      UMP_DATABASE_HOST: api-db
-      UMP_DATABASE_PORT: 5432
-      UMP_GEOSERVER_WORKSPACE_NAME: ${UMP_GEOSERVER_WORKSPACE_NAME} # !using the same as for the local app
-      UMP_GEOSERVER_USER: admin
-      UMP_GEOSERVER_PASSWORD: geoserver
-      UMP_GEOSERVER_URL: http://geoserver:8080/geoserver
-      #---
-      # using dedicated database for geoserver results
-      UMP_GEOSERVER_DB_PORT: 5432
-      UMP_GEOSERVER_DB_NAME: geoserver_results
-      UMP_GEOSERVER_DB_USER: geoserver
-      UMP_GEOSERVER_DB_PASSWORD: geoserver
-      UMP_GEOSERVER_DB_HOST: geoserver-db
-      #---
-      UMP_GEOSERVER_CONNECTION_TIMEOUT: 60 # seconds
-      UMP_JOB_DELETE_INTERVAL: 240 # minutes
+      #
+      UMP_REWRITE_REMOTE_LINKS: true
+      UMP_VERIFY_REMOTE_RESULTS: true
+      UMP_PER_PROCESS_FETCH: false
+      #
+      UMP_AUTH_ENABLED: false
+      UMP_JWKS_URL: http://keycloak:8080/auth/realms/UrbanModelPlatform/protocol/openid-connect/certs
+      UMP_JWT_ISSUER: http://keycloak:8080/auth/realms/UrbanModelPlatform
+      UMP_JWT_AUDIENCE: account
+      UMP_JWT_ROLES_CLAIMS: realm_access.roles,resource_access.ump-client.roles
+      UMP_JWKS_CACHE_TTL_SECONDS: 3600
+      UMP_PUBLIC_PROCESSES: true
     volumes:
-      - ./providers.yaml:/home/pythonuser/providers.yaml
+      - ./providers.yaml:/app/providers.yaml
+    networks:
+      - dev
+
+  # Lightweight mock OGC API Processes server — no external dependencies.
+  # Provides echo, hello-world, slow, and failing-job processes for manual testing.
+  # Add to providers.yaml: name: mock, url: http://mock-ogc-server:5001
+  mock-ogc-server:
+    image: python:3.12-slim
+    working_dir: /app
+    volumes:
+      - ./scripts/mock_ogc_server.py:/app/mock_ogc_server.py:ro
+    environment:
+      MOCK_BASE_URL: http://mock-ogc-server:5001
+      MOCK_JOB_DELAY_SECONDS: "2"
+      MOCK_SLOW_DELAY_SECONDS: "10"
+    command: >
+      sh -c "pip install fastapi uvicorn --quiet &&
+             uvicorn mock_ogc_server:app --host 0.0.0.0 --port 5001"
+    ports:
+      - "5001:5001"
     networks:
       - dev
 
 # !NOTE: here starts the dev environment setup!
 # these apps a required dependencies for the UMP
 # and are not part of the UMP itself
-  api-db:
-    image: postgis/postgis:14-3.3
+  ump-db:
+    image: postgres:18.4
     volumes:
-      - postgres_data:/var/lib/postgresql/data/
+      - postgres_data:/var/lib/postgresql/
     environment:
       POSTGRES_DB: ump
       POSTGRES_USER: ump
       POSTGRES_PASSWORD: ump
     ports:
-      - ${API_DB_PORT_EXTERNAL}:5432
+      - ${UMPDB_PORT_EXTERNAL}:5432
     networks:
       - dev
 
   # Separate PostGIS database for Geoserver results
   geoserver-db:
-    image: postgis/postgis:14-3.3
+    image: postgis/postgis:18-3.6-alpine
     volumes:
-      - geoserver_postgres_data:/var/lib/postgresql/data/
+      - geoserver_postgres_data:/var/lib/postgresql
     environment:
       POSTGRES_DB: geoserver_results
       POSTGRES_USER: geoserver
@@ -106,26 +128,79 @@ services:
     networks:
       - dev
 
-  modelserver:
-    image: ${CONTAINER_REGISTRY}/${IMAGE_NAME}/example_ogcapi_processes:main
-    build:
-      context: ./modelserver_example
-      dockerfile: Dockerfile
+  noise-v4-api:
+    image: lgvanalytics.azurecr.io/noiseprocesses:v4.0.5custom-coefficients-1.2.5
+    restart: "unless-stopped"
     environment:
-      PYGEOAPI_CONFIG: /home/pythonuser/pygeoapi-config.yaml
-      PYGEOAPI_OPENAPI: /home/pythonuser/pygeoapi-openapi.yaml
-      PYGEOAPI_SERVER_HOST: ${PYGEOAPI_SERVER_HOST}
-      PYGEOAPI_SERVER_PORT_INTERNAL: ${PYGEOAPI_SERVER_PORT_INTERNAL}
-      PYGEOAPI_SERVER_PORT_EXTERNAL: ${PYGEOAPI_SERVER_PORT_EXTERNAL}
+      FP_CELERY_BROKER_DB: '0'
+      FP_CELERY_BROKER_HOST: "noise-v4-redis"
+      FP_CELERY_BROKER_PORT: '6379'
+      NP_JAVA_LIB_DIR: "/app/dist/lib"
+      NP_LOG_LEVEL: DEBUG
+
+      FP_RESULTS_CACHE_TTL_DAYS: '365'
+      FP_RESULT_CACHE_DB: '1'
+      FP_RESULT_CACHE_HOST: "noise-v4-redis"
+      FP_RESULT_CACHE_PORT: '6379'
+
+      FP_API_TITLE: "Noise calculation - OGC API Processes"
+      FP_API_DESCRIPTION: "An OGC API Processes implementation for noise calculations."
+
+      FP_CELERY_TASK_TLIMIT_HARD: 1800
+      FP_CELERY_TASK_TLIMIT_SOFT: 1500
+      FP_RESULTS_TEMP_TTL_HOURS: 24
+
+      FP_JOB_STATUS_TTL_DAYS: 365
+      FP_SYNC_EXECUTION_TIMEOUT_SECONDS: 10
+      FP_LOG_LEVEL: "DEBUG"
+
+      NP_JAVA_MAX_HEAP_SIZE: 2048
+      NP_JAVA_INITIAL_HEAP_SIZE: 1024
+      NP_DATABASE_IN_MEMORY: True
+    command: ['uvicorn', 'app:app', '--host', '0.0.0.0', '--port', '8000', "--log-level", "debug"]
     ports:
-      - ${PYGEOAPI_SERVER_PORT_EXTERNAL}:${PYGEOAPI_SERVER_PORT_INTERNAL}
-    command: [
-      '/bin/bash', '-c',
-      'pygeoapi openapi generate /home/pythonuser/pygeoapi-config.yaml --output-file /home/pythonuser/pygeoapi-openapi.yaml && pygeoapi serve --flask'
-    ]
+      - 8001:8000
     networks:
       - dev
+
+  noise-v4-worker:
+    image: lgvanalytics.azurecr.io/noiseprocesses:v4.0.5custom-coefficients-1.2.5
+    restart: "unless-stopped"
+    environment:
+      FP_RESULT_CACHE_DB: '1'
+      FP_RESULT_CACHE_HOST: "noise-v4-redis"
+      FP_RESULT_CACHE_PORT: '6379'
+      FP_RESULTS_CACHE_TTL_DAYS: 365
       
+      NP_JAVA_LIB_DIR: "/app/dist/lib"
+      
+      NP_JAVA_MAX_HEAP_SIZE: 2048
+      NP_JAVA_INITIAL_HEAP_SIZE: 1024
+      NP_DATABASE_IN_MEMORY: True
+
+      FP_CELERY_BROKER_HOST: "noise-v4-redis"
+      FP_CELERY_BROKER_PORT: 6379
+      FP_CELERY_BROKER_DB: 0
+      FP_CELERY_TASK_TLIMIT_HARD: 1800 # 22 Minutes
+      FP_CELERY_TASK_TLIMIT_SOFT: 1200 # 20 Minutes
+
+      FP_JOB_STATUS_TTL_DAYS: 365
+
+    # ports:
+    #   - ${WEBAPP_PORT_CONTAINER}:${WEBAPP_PORT}
+    command: ['celery', '-A', 'fastprocesses.worker.celery_app', 'worker', '--loglevel=debug']
+    networks:
+      - dev
+
+  noise-v4-redis:
+    image: docker.dragonflydb.io/dragonflydb/dragonfly:v1.27.1
+    # expose: 
+    #   - ${REDIS_PORT}
+    restart: "unless-stopped"
+    command: dragonfly --requirepass "" # --appendonly yes
+    networks:
+      - dev
+
   keycloak:
     image: quay.io/keycloak/keycloak:25.0
     ports: 
@@ -135,13 +210,14 @@ services:
     environment:
       KEYCLOAK_ADMIN: admin
       KEYCLOAK_ADMIN_PASSWORD: admin
+      KC_FRONTEND_URL: http://keycloak:8080/auth/realms/UrbanModelPlatform
       KC_DB: postgres
       KC_DB_URL_HOST: kc-db
       KC_DB_URL_PORT: 5432
       KC_DB_URL_DATABASE: keycloak
       KC_DB_USERNAME: keycloak
       KC_DB_PASSWORD: keycloak
-      KC_HOSTNAME: localhost
+      KC_HOSTNAME: keycloak
       KC_HOSTNAME_PATH: /auth
       KC_HTTP_RELATIVE_PATH: /auth
     command: ['start', '--proxy-headers', 'xforwarded', '--http-enabled', 'true', '--import-realm']

@@ -1,41 +1,46 @@
-import logging
+import asyncio
+import os
 from logging.config import fileConfig
 
 from alembic import context
-from flask import current_app
+from sqlalchemy import pool
+from sqlalchemy.ext.asyncio import create_async_engine
+from sqlmodel import SQLModel
 
-# this is the Alembic Config object, which provides
-# access to the values within the .ini file in use.
+# Import ORM table models so that SQLModel.metadata is populated.
+# These must be imported before target_metadata is assigned — Alembic's
+# autogenerate inspects the metadata at import time.
+# Only the adapter-layer ORM models are imported here; the core domain
+# models (pure Pydantic) are never touched by Alembic.
+import ump.adapters.job_repository_sql  # noqa: F401  registers JobRecord, JobStatusHistoryRecord
+
+# Alembic Config object
 config = context.config
 
-# Interpret the config file for Python logging.
-# This line sets up loggers basically.
-fileConfig(config.config_file_name)
-logger = logging.getLogger('alembic.env')
+# Override sqlalchemy.url from environment variable when present.
+# Priority:
+#   1. UMP_DATABASE_URL  (full DSN — asyncpg prefix stripped for sync Alembic engine)
+#   2. Individual UMP_DATABASE_* vars  (UMP_DATABASE_HOST / PORT / USER / PASSWORD / NAME)
+#   3. alembic.ini placeholder (will fail at runtime — useful only for autogenerate dry-runs)
+db_url = os.environ.get("UMP_DATABASE_URL")
+if db_url:
+    config.set_main_option("sqlalchemy.url", db_url)
+else:
+    host = os.environ.get("UMP_DATABASE_HOST", "localhost")
+    port = os.environ.get("UMP_DATABASE_PORT", "5432")
+    user = os.environ.get("UMP_DATABASE_USER", "postgres")
+    password = os.environ.get("UMP_DATABASE_PASSWORD", "postgres")
+    name = os.environ.get("UMP_DATABASE_NAME", "ump")
+    config.set_main_option(
+        "sqlalchemy.url",
+        f"postgresql+asyncpg://{user}:{password}@{host}:{port}/{name}",
+    )
 
-def get_engine():
-    try:
-        # this works with Flask-SQLAlchemy<3 and Alchemical
-        return current_app.extensions['migrate'].db.get_engine()
-    except (TypeError, AttributeError):
-        # this works with Flask-SQLAlchemy>=3
-        return current_app.extensions['migrate'].db.engine
+if config.config_file_name is not None:
+    fileConfig(config.config_file_name)
 
-
-def get_engine_url():
-    try:
-        return get_engine().url.render_as_string(hide_password=False).replace(
-            '%', '%%')
-    except AttributeError:
-        return str(get_engine().url).replace('%', '%%')
-
-
-# add your model's MetaData object here
-# for 'autogenerate' support
-# from myapp import mymodel
-# target_metadata = mymodel.Base.metadata
-config.set_main_option('sqlalchemy.url', get_engine_url())
-target_db = current_app.extensions['migrate'].db
+# Use SQLModel's shared metadata so autogenerate detects our table models.
+target_metadata = SQLModel.metadata
 
 # other values from the config, defined by the needs of env.py,
 # can be acquired:
@@ -43,13 +48,7 @@ target_db = current_app.extensions['migrate'].db
 # ... etc.
 
 
-def get_metadata():
-    if hasattr(target_db, 'metadatas'):
-        return target_db.metadatas[None]
-    return target_db.metadata
-
-
-def run_migrations_offline():
+def run_migrations_offline() -> None:
     """Run migrations in 'offline' mode.
 
     This configures the context with just a URL
@@ -63,46 +62,33 @@ def run_migrations_offline():
     """
     url = config.get_main_option("sqlalchemy.url")
     context.configure(
-        url=url, target_metadata=get_metadata(), literal_binds=True
+        url=url,
+        target_metadata=target_metadata,
+        literal_binds=True,
+        dialect_opts={"paramstyle": "named"},
     )
 
     with context.begin_transaction():
         context.run_migrations()
 
 
-def run_migrations_online():
-    """Run migrations in 'online' mode.
+def run_migrations_online() -> None:
+    """Run migrations in 'online' mode using an async engine (asyncpg)."""
 
-    In this scenario we need to create an Engine
-    and associate a connection with the context.
+    url = config.get_main_option("sqlalchemy.url")
 
-    """
-
-    # this callback is used to prevent an auto-migration from being generated
-    # when there are no changes to the schema
-    # reference: http://alembic.zzzcomputing.com/en/latest/cookbook.html
-    def process_revision_directives(context, revision, directives):
-        if getattr(config.cmd_opts, 'autogenerate', False):
-            script = directives[0]
-            if script.upgrade_ops.is_empty():
-                directives[:] = []
-                logger.info('No changes in schema detected.')
-
-    conf_args = current_app.extensions['migrate'].configure_args
-    if conf_args.get("process_revision_directives") is None:
-        conf_args["process_revision_directives"] = process_revision_directives
-
-    connectable = get_engine()
-
-    with connectable.connect() as connection:
-        context.configure(
-            connection=connection,
-            target_metadata=get_metadata(),
-            **conf_args
-        )
-
+    def do_run_migrations(connection):
+        context.configure(connection=connection, target_metadata=target_metadata)
         with context.begin_transaction():
             context.run_migrations()
+
+    async def run_async_migrations():
+        connectable = create_async_engine(url, poolclass=pool.NullPool)
+        async with connectable.connect() as connection:
+            await connection.run_sync(do_run_migrations)
+        await connectable.dispose()
+
+    asyncio.run(run_async_migrations())
 
 
 if context.is_offline_mode():
