@@ -68,6 +68,13 @@ class UmpSettings(BaseSettings):
     UMP_API_SERVER_URL_PREFIX: str = "/"
     # Supported API versions (major.minor strings). Used to mount versioned routes like /v1.0/
     UMP_SUPPORTED_API_VERSIONS: list[str] = ["1.0"]
+    # Supported MCP tool-catalog contract versions, mounted as /mcp/v1/tools.
+    # Major only: the path moves on a breaking change, while additive revisions
+    # are reported by ToolCatalog.version in the body. Deliberately separate
+    # from UMP_SUPPORTED_API_VERSIONS (which tracks the OGC standard) and from
+    # the MCP protocol's own date-based revisions, which are negotiated between
+    # the MCP server and its clients — not here. See REF-F10-mcp-endpoint.md.
+    UMP_MCP_CATALOG_VERSIONS: list[str] = ["1"]
     # When enabled, replace external links in fetched processes with local API links
     UMP_REWRITE_REMOTE_LINKS: bool = True
     # When true, JobManager verifies remote results immediately for terminal success responses

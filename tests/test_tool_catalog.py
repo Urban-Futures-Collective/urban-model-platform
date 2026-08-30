@@ -22,7 +22,7 @@ from typing import Any, Dict, List, cast
 import pytest
 
 from ump.adapters.colon_process_id_validator import ColonProcessId
-from ump.core.interfaces.auth import AuthContext
+from ump.core.interfaces.auth import AuthContext, AuthPort
 from ump.core.interfaces.http_client import HttpClientPort
 from ump.core.interfaces.providers import ProvidersPort
 from ump.core.managers.process_manager import ProcessManager
@@ -304,3 +304,118 @@ async def test_unrestricted_bypasses_role_filtering():
     catalog = await service.build(anonymous(), unrestricted=True)
 
     assert [t.tool for t in catalog.tools] == ["infra:open", "infra:secret"]
+
+
+# ---------------------------------------------------------------------------
+# 7. Route mounting
+# ---------------------------------------------------------------------------
+
+
+class FakeAuthPort(AuthPort):
+    """Always resolves to the same context, whatever the token."""
+
+    def __init__(self, context: AuthContext):
+        self._context = context
+
+    async def verify(self, token):
+        return self._context
+
+
+def _build_app(auth_port: AuthPort | None = None):
+    """Wire a real app the way the composition root does, with faked ports."""
+    from fastapi.testclient import TestClient
+
+    from ump.adapters.job_repository_inmemory import InMemoryJobRepository
+    from ump.adapters.web.fastapi import create_app
+
+    providers = FakeProvidersService()
+    client = FakeHttpClient(
+        {
+            f"{PROVIDER_URL}processes/open": _process_doc("open", "Open Process"),
+            f"{PROVIDER_URL}processes/secret": _process_doc("secret", "Secret"),
+        }
+    )
+    validator = ColonProcessId()
+    authz = AuthorizationService(providers)
+
+    def process_manager_factory(http_client):
+        return ProcessManager(providers, http_client, process_id_validator=validator)
+
+    def job_manager_factory(http_client, process_manager):
+        class _StubJobManager:
+            async def shutdown(self):
+                return None
+
+        return _StubJobManager()
+
+    def tool_catalog_factory(process_manager):
+        return ToolCatalogService(
+            process_manager=process_manager,
+            authorization_service=authz,
+            process_id_validator=validator,
+        )
+
+    app = create_app(
+        process_manager_factory=process_manager_factory,
+        http_client=client,
+        job_manager_factory=job_manager_factory,
+        job_repo=InMemoryJobRepository("scratch/test_tool_catalog"),
+        process_id_validator=validator,
+        auth_port=auth_port,
+        authorization_service=authz,
+        tool_catalog_factory=tool_catalog_factory,
+    )
+    return TestClient(app)
+
+
+def test_catalog_is_mounted_under_its_own_version_prefix():
+    with _build_app() as client:
+        assert client.get("/mcp/v1/tools").status_code == 200
+        # No floating "latest" alias: a client must name the contract it wants,
+        # so a future /mcp/v2 cannot silently break a pinned consumer.
+        assert client.get("/mcp/tools").status_code == 404
+
+
+def test_catalog_prefix_is_independent_of_the_ogc_version():
+    with _build_app() as client:
+        assert client.get("/v1.0/mcp/tools").status_code == 404
+        assert client.get("/v1.0/mcp/v1/tools").status_code == 404
+
+
+def test_route_reports_contract_revision_in_the_body():
+    with _build_app() as client:
+        body = client.get("/mcp/v1/tools").json()
+
+    assert body["version"] == "1.0"
+
+
+def test_no_auth_port_means_auth_is_not_in_play():
+    """Nothing wired to authenticate against → nothing to filter on."""
+    with _build_app() as client:
+        body = client.get("/mcp/v1/tools").json()
+
+    assert [t["tool"] for t in body["tools"]] == ["infra:open", "infra:secret"]
+
+
+def test_route_filters_but_never_401s_an_anonymous_caller(monkeypatch):
+    from ump.core.settings import app_settings
+
+    monkeypatch.setattr(app_settings, "UMP_AUTH_ENABLED", True)
+
+    with _build_app(auth_port=FakeAuthPort(anonymous())) as client:
+        response = client.get("/mcp/v1/tools")
+
+    assert response.status_code == 200
+    assert [t["tool"] for t in response.json()["tools"]] == ["infra:open"]
+
+
+def test_auth_disabled_bypasses_filtering_over_http(monkeypatch):
+    """UMP_AUTH_ENABLED=false: the switch means what settings.py says it means."""
+    from ump.core.settings import app_settings
+
+    monkeypatch.setattr(app_settings, "UMP_AUTH_ENABLED", False)
+
+    with _build_app(auth_port=FakeAuthPort(anonymous())) as client:
+        body = client.get("/mcp/v1/tools").json()
+
+    assert [t["tool"] for t in body["tools"]] == ["infra:open", "infra:secret"]

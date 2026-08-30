@@ -468,18 +468,18 @@ def create_app(
     for ver in getattr(app_settings, "UMP_SUPPORTED_API_VERSIONS", ["1.0"]):
         app.include_router(api_router, prefix=f"/v{ver}")
 
-    # MCP tool catalog — mounted outside the OGC version prefixes on purpose:
-    # the OGC surface is standardised and untouched, and the catalog contract
-    # versions independently (see reports/REF-F10-mcp-endpoint.md).
+    # MCP tool catalog — mounted under its own version namespace, outside the
+    # OGC version prefixes on purpose: the OGC surface is standardised and
+    # untouched, and the catalog contract versions independently of both the
+    # OGC standard and the MCP protocol (see reports/REF-F10-mcp-endpoint.md).
     if tool_catalog_factory is not None:
-        app.include_router(
-            create_mcp_router(
-                get_auth=_get_auth,
-                auth_enabled=lambda: app.state.auth_port is not None
-                and app_settings.UMP_AUTH_ENABLED,
-            ),
-            prefix="/mcp",
+        mcp_router = create_mcp_router(
+            get_auth=_get_auth,
+            auth_enabled=lambda: app.state.auth_port is not None
+            and app_settings.UMP_AUTH_ENABLED,
         )
+        for ver in getattr(app_settings, "UMP_MCP_CATALOG_VERSIONS", ["1"]):
+            app.include_router(mcp_router, prefix=f"/mcp/v{ver}")
 
     # Dedicated route for the landing CSS. This is a robust fallback for environments
     # where StaticFiles mounting might not be available (packaged apps, different cwd).

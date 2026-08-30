@@ -1,4 +1,4 @@
-_Last_updated: 2026-08-29
+_Last_updated: 2026-08-30
 
 # Notes for the assistant
 
@@ -92,18 +92,71 @@ between core components.
 ```
 
 Field names follow §4 of `mcp-integration-strategy.md` and the v2 prototype, so the
-existing `ump-x-mcp` mapping code keeps working. `version` is the **catalog** contract
-version and is deliberately independent of `UMP_SUPPORTED_API_VERSIONS`.
+existing `ump-x-mcp` mapping code keeps working. `version` reports the exact catalog
+contract revision; see "Route placement and versioning" for how it relates to the
+`/mcp/v1/` prefix.
 
-## Route placement
+Note for a future revision: MCP's own Tool object uses `name` (not `tool`) and also
+carries optional `outputSchema` and `annotations`. Aligning to it would be a breaking
+change and hence a new path prefix, whereas adding `outputSchema` — derivable from
+`Process.outputs`, which is already fetched and currently discarded — is additive and
+only bumps the body version. That field list was read from the `2025-06-18` revision
+and must be re-checked against the current one before any such alignment.
 
-Mounted as its own router with prefix `/mcp`, registered **outside** the
-`for ver in UMP_SUPPORTED_API_VERSIONS` loop in `create_app`. Consequences:
+## Route placement and versioning
+
+Mounted as its own router at **`/mcp/v{major}/tools`** (`UMP_MCP_CATALOG_VERSIONS`,
+default `["1"]`), registered **outside** the `for ver in UMP_SUPPORTED_API_VERSIONS`
+loop in `create_app`. Consequences:
 
 - the OGC router is not modified at all;
 - the MCP contract versions on its own clock rather than being dragged along by the
-  OGC API version;
-- the path matches what `ump-x-mcp` already calls.
+  OGC API version.
+
+### Three version numbers, three namespaces
+
+| Number | Owner | Where it lives |
+|---|---|---|
+| OGC API Processes `1.0` | the OGC standard | `/v1.0/…` route prefix |
+| Tool-catalog contract | **UMP** | `/mcp/v1/…` prefix + `ToolCatalog.version` |
+| MCP protocol (`YYYY-MM-DD`) | modelcontextprotocol.io | **not represented in UMP** |
+
+**Major in the path, exact revision in the body.** The two mechanisms answer
+different questions: a path prefix is *selective* (a client asks for a contract it
+understands, and two contracts can be served side by side during a migration), a
+body field is *descriptive* (it reports what you got, which is too late to act on).
+So the path moves only on a breaking change, while additive revisions bump
+`ToolCatalog.version` to `1.1`, `1.2`, … and leave the URL alone.
+
+This deliberately differs from the OGC prefix's `major.minor` form: `/v1.0/` mirrors
+a standard UMP does not control, whereas the catalog contract is UMP's own and can
+be held to the stricter rule that URLs churn only when clients must change.
+
+**No floating alias.** There is no unversioned `/mcp/tools` pointing at "latest" —
+that would let a UMP upgrade silently break a pinned consumer, which is the exact
+failure mode path versioning exists to prevent.
+
+### Why the MCP protocol version is *not* mirrored in the path
+
+The current MCP protocol revision is `2026-07-28` (revisions are `YYYY-MM-DD`,
+incremented only on backwards-incompatible changes). It is not mirrored here:
+
+- **It would not be a mirror.** The versions are dates, so faithful mirroring means
+  `/mcp/2026-07-28/tools` — which reads as a conformance claim.
+- **This endpoint does not speak MCP.** It serves REST/JSON: no JSON-RPC envelope,
+  no `tools/call`, no `server/discover`, no `_meta`. `ump-x-mcp` is the component
+  that tracks the protocol revision; that is the point of the sidecar decision.
+- **MCP does not version by path.** Negotiation is per request, via
+  `io.modelcontextprotocol/protocolVersion` in `_meta` and the
+  `MCP-Protocol-Version` header on Streamable HTTP. Copying the number while
+  discarding the mechanism buys the churn without the interoperability.
+- **The cadences are unrelated.** The protocol bumps on *its* breaking changes,
+  which say nothing about this catalog's shape — and it would consume the one
+  version slot UMP needs to signal a break of its own.
+
+If a future revision makes descriptors MCP-Tool-shaped, the protocol revision
+belongs in the body as a descriptive field, e.g. `"toolShape": "mcp/2026-07-28"`,
+claiming only "these pass through unmodified to a client on that revision".
 
 ## Authorization
 
@@ -193,13 +246,20 @@ If tool descriptors later need enrichment the OGC description cannot carry (exam
 output hints, cost estimates), that *is* a genuine outbound dependency and would be added
 as a `ToolAnnotationsPort` — the one port this feature might eventually justify.
 
-## Open question — endpoint versioning of the OGC calls
+## Open questions — to confirm with the `ump-x-mcp` maintainers
 
-`ump-x-mcp` documents its UMP calls as `POST /processes/{id}/execution` and
-`GET /jobs/{id}`, i.e. **unversioned**, but v3 mounts those routes only under `/v1.0/`
-(verified: `GET /processes` → 404, `GET /v1.0/processes` → 200). Either `ump-x-mcp`'s UMP
-base URL must include the `/v1.0` prefix, or UMP must expose an unversioned alias. To be
-confirmed with the `ump-x-mcp` maintainers before integration testing.
+Both are path questions and should be settled in one exchange, before either side
+releases; afterwards they become coordinated breaking changes across two repos.
+
+**1. The catalog path moved.** `ump-x-mcp` documents `GET /mcp/tools`; UMP now serves
+`GET /mcp/v1/tools`, with no unversioned alias (rationale above). Its UMP client needs
+the new path.
+
+**2. The OGC calls are versioned.** `ump-x-mcp` documents
+`POST /processes/{id}/execution` and `GET /jobs/{id}`, i.e. **unversioned**, but v3
+mounts those routes only under `/v1.0/` (verified: `GET /processes` → 404,
+`GET /v1.0/processes` → 200). Either its UMP base URL includes the `/v1.0` prefix, or
+UMP exposes an unversioned alias.
 
 ## Roadmap position
 
