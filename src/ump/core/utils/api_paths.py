@@ -29,3 +29,13 @@ def api_base() -> str:
     prefix = app_settings.UMP_API_SERVER_URL_PREFIX.rstrip("/")
     versions = getattr(app_settings, "UMP_SUPPORTED_API_VERSIONS", None) or ["1.0"]
     return f"{prefix}/v{versions[0]}"
+
+
+def external_base() -> str:
+    """Return the external mount point alone, without a version segment.
+
+    For app-level routes that are not mounted per API version: ``/openapi.json``,
+    ``/docs``, ``/static/…`` and the MCP catalog. Empty string when UMP is served
+    at the root, ``/api`` when a reverse proxy publishes it there.
+    """
+    return app_settings.UMP_API_SERVER_URL_PREFIX.rstrip("/")

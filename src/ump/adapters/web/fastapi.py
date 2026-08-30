@@ -29,6 +29,7 @@ from ump.core.models.process import Process, ProcessList
 from ump.adapters.web.mcp import create_mcp_router
 from ump.core.services.authorization import AuthorizationService
 from ump.core.services.tool_catalog import ToolCatalogService
+from ump.core.utils.api_paths import external_base
 from ump.core.settings import app_settings, logger
 
 
@@ -258,6 +259,15 @@ def create_app(
             return  # auth disabled globally
         app.state.authz.check_process_access(auth, process_id)
 
+    def _catalog_is_unrestricted() -> bool:
+        """True when no filtering applies: auth not wired, disabled, or opted out."""
+        return (
+            app.state.auth_port is None
+            or app.state.authz is None
+            or not app_settings.UMP_AUTH_ENABLED
+            or app_settings.UMP_PUBLIC_PROCESSES
+        )
+
     def _check_job_access(job, auth: AuthContext, request: Request) -> bool:
         """Return True if the caller may see this job, False if it should appear as 404."""
         if job.user_id is None:
@@ -276,19 +286,26 @@ def create_app(
         response_model_by_alias=True,
     )
     async def get_all_processes(request: Request):
-        if app.state.auth_port is not None and not app_settings.UMP_PUBLIC_PROCESSES:
-            auth = await _get_auth(request)
-            if not auth.is_authenticated:
-                raise OGCProcessException(
-                    OGCExceptionResponse(
-                        type="about:blank",
-                        title="Unauthorized",
-                        status=401,
-                        detail="Authentication required to view processes.",
-                        instance=str(request.url),
-                    )
-                )
-        return await app.state.process_port.get_all_processes()
+        """List the processes the caller may see.
+
+        The catalog is filtered per caller rather than gated all-or-nothing:
+        an anonymous caller sees the processes marked ``anonymous-access: true``
+        and nothing else, which is what UMP_PUBLIC_PROCESSES has always claimed
+        ("per-process anonymous access is still controlled by providers.yaml")
+        and what v2 did via has_user_access_rights. An empty catalog is a valid
+        answer; this route does not 401.
+        """
+        process_list = await app.state.process_port.get_all_processes()
+        if _catalog_is_unrestricted():
+            return process_list
+
+        auth = await _get_auth(request)
+        visible = [
+            summary
+            for summary in process_list.processes
+            if app.state.authz.can_access_process(auth, summary.pid)
+        ]
+        return ProcessList(processes=visible, links=process_list.links)
 
     @api_router.get(
         "/processes/{process_id}",
@@ -299,18 +316,23 @@ def create_app(
     async def get_process(process_id: str, request: Request):
         if err := validate_process_id(process_id, request, process_id_validator):
             return err
-        if app.state.auth_port is not None and not app_settings.UMP_PUBLIC_PROCESSES:
+        if not _catalog_is_unrestricted():
             auth = await _get_auth(request)
-            if not auth.is_authenticated:
+            if not app.state.authz.can_access_process(auth, process_id):
+                # 401 when the caller could still authenticate, 403 when they are
+                # authenticated but hold neither the provider nor the process role.
+                unauthenticated = not auth.is_authenticated
                 raise OGCProcessException(
                     OGCExceptionResponse(
                         type="about:blank",
-                        title="Unauthorized",
-                        status=401,
+                        title="Unauthorized" if unauthenticated else "Forbidden",
+                        status=401 if unauthenticated else 403,
                         detail=(
                             "Authentication required to view process details. "
                             "If you think this is an error reach out to the platform "
                             "administrator and give them the following requestId for debugging."
+                            if unauthenticated
+                            else f"Missing role for process '{process_id}'."
                         ),
                         instance=str(request.url),
                     )
@@ -518,7 +540,7 @@ def create_app(
         contact = api.get("contact") or {}
 
         # Adapter-local style
-        css_href = "/static/style.css"
+        css_href = f"{external_base()}/static/style.css"
 
         supported_versions = getattr(
             app_settings, "UMP_SUPPORTED_API_VERSIONS", ["1.0"]
@@ -534,6 +556,8 @@ def create_app(
             "powered_by": "<a href='https://github.com/citysciencelab/urban-model-platform'>urban-model-platform</a>",
             "css": css_href,
             "supported_versions": supported_versions,
+            "openapi_url": api.get("openapi_url", f"{external_base()}/openapi.json"),
+            "docs_url": api.get("docs_url", f"{external_base()}/docs"),
         }
 
         return templates.TemplateResponse("template.html", context)
