@@ -25,7 +25,8 @@ namespace Registry {
     +sub : text PK  [JWT sub]
     +display_name : text
     +email : text
-    +first_seen_at / last_seen_at
+    +first_seen_at : timestamptz
+    +last_seen_at : timestamptz
   }
   class provider_server {
     <<table>>
@@ -38,6 +39,8 @@ namespace Registry {
     +ttw_job_done_seconds : numeric
     +is_active : boolean
     +last_discovered_at : timestamptz
+    +created_at : timestamptz
+    +updated_at : timestamptz
   }
   class model {
     <<table>>
@@ -47,25 +50,38 @@ namespace Registry {
     +remote_process_id : text  UK[server, process]
     +owner_sub : text FK
     +default_lang : text  [e.g. de, required in every L]
-    +full_name / short_description : jsonb  [L]
-    +purpose / limitations_risks : jsonb  [L]
+    +full_name : jsonb  [L]
+    +short_description : jsonb  [L]
+    +purpose : jsonb  [L]
+    +limitations_risks : jsonb  [L]
     +keywords : jsonb  [lang → list]
-    +version_label / repository_url / code_ref : text
+    +version_label : text
+    +repository_url : text
+    +code_ref : text
     +license : text  [SPDX]
     +requirements : jsonb
-    +contributors / literature / applications : jsonb
-    +test_cases / io_notes : jsonb  [texts as L]
+    +contributors : jsonb
+    +literature : jsonb
+    +applications : jsonb  [texts as L]
+    +test_cases : jsonb  [texts as L]
+    +io_notes : jsonb  [texts as L]
     +process_config : jsonb  [providers.yaml fields]
     +status : text  [workflow, see REF-F12]
     +exec_state : text  [generated from status]
-    +status_note / status_changed_by / status_changed_at
+    +status_note : text
+    +status_changed_by : text FK
+    +status_changed_at : timestamptz
     +published_at : timestamptz
     +verified_by : text FK  [≠ owner_sub]
-    +verified_at / verification_job_id
-    +verified_interface : jsonb  [+ sha256]
+    +verified_at : timestamptz
+    +verification_job_id : text
+    +verified_interface : jsonb
+    +verified_interface_sha256 : text
     +current_interface_sha256 : text
-    +interface_state : in_sync | drifted | …
+    +interface_state : text  [in_sync, drifted, …]
     +last_checked_at : timestamptz
+    +created_at : timestamptz
+    +updated_at : timestamptz
   }
   class audit_log {
     <<append-only, 3 months>>
@@ -88,12 +104,16 @@ namespace Existing_UMP_backend {
     +id : text PK
     +process_id : text  [provider∶process]
     +user_id : text  [JWT sub]
-    +status / inputs / …
+    +status : text
+    +inputs : jsonb
+    +further columns unchanged
   }
 }
 
 provider_server "1" <-- "*" model : runs on
-app_user "1" <-- "*" model : owner / verifier
+app_user "1" <-- "*" model : owner_sub
+app_user "0..1" <-- "*" model : verified_by
+app_user "0..1" <-- "*" model : status_changed_by
 app_user "0..1" <-- "*" provider_server : owner
 app_user ..> KeycloakRealm : sub
 jobs ..> model : process_id = name∶remote_process_id
