@@ -1,0 +1,102 @@
+---
+title: UMP Model Registry — schema "registry" (REF-F12) · L = language map {de, en, …}
+config:
+  class:
+    hideEmptyMembersBox: true
+---
+classDiagram
+direction LR
+
+namespace Keycloak {
+  class KeycloakRealm {
+    <<external>>
+    +user id = sub
+    +platform roles : provider | verifier | user | viewer
+    +platform roles : access-admin | platform-admin
+    +model access roles : provider
+    +model access roles : provider∶process
+    +edited by UMP-X admin pages [REF-F11]
+  }
+}
+
+namespace Registry {
+  class app_user {
+    <<table>>
+    +sub : text PK  [JWT sub]
+    +display_name : text
+    +email : text
+    +first_seen_at / last_seen_at
+  }
+  class provider_server {
+    <<table>>
+    +id : uuid PK
+    +name : text UK  [process-id prefix]
+    +base_url : text
+    +owner_sub : text FK
+    +auth_type : NoAuth | BasicAuth | ApiKey | BearerToken
+    +credentials : bytea  [encrypted, write-only]
+    +ttw_job_done_seconds : numeric
+    +is_active : boolean
+    +last_discovered_at : timestamptz
+  }
+  class model {
+    <<table>>
+    +id : uuid PK
+    +slug : text UK
+    +provider_server_id : uuid FK
+    +remote_process_id : text  UK[server, process]
+    +owner_sub : text FK
+    +default_lang : text  [e.g. de, required in every L]
+    +full_name / short_description : jsonb  [L]
+    +purpose / limitations_risks : jsonb  [L]
+    +keywords : jsonb  [lang → list]
+    +version_label / repository_url / code_ref : text
+    +license : text  [SPDX]
+    +requirements : jsonb
+    +contributors / literature / applications : jsonb
+    +test_cases / io_notes : jsonb  [texts as L]
+    +process_config : jsonb  [providers.yaml fields]
+    +status : text  [workflow, see REF-F12]
+    +exec_state : text  [generated from status]
+    +status_note / status_changed_by / status_changed_at
+    +published_at : timestamptz
+    +verified_by : text FK  [≠ owner_sub]
+    +verified_at / verification_job_id
+    +verified_interface : jsonb  [+ sha256]
+    +current_interface_sha256 : text
+    +interface_state : in_sync | drifted | …
+    +last_checked_at : timestamptz
+  }
+  class audit_log {
+    <<append-only, 3 months>>
+    +id : bigint PK
+    +occurred_at : timestamptz
+    +actor_sub : text
+    +actor_roles : text[]
+    +action : text
+    +model_id : uuid
+    +job_id : text
+    +outcome : success | denied | failure
+    +details : jsonb
+    +request_id : text
+  }
+}
+
+namespace Existing_UMP_backend {
+  class jobs {
+    <<table>>
+    +id : text PK
+    +process_id : text  [provider∶process]
+    +user_id : text  [JWT sub]
+    +status / inputs / …
+  }
+}
+
+provider_server "1" <-- "*" model : runs on
+app_user "1" <-- "*" model : owner / verifier
+app_user "0..1" <-- "*" provider_server : owner
+app_user ..> KeycloakRealm : sub
+jobs ..> model : process_id = name∶remote_process_id
+jobs ..> app_user : user_id = sub
+audit_log ..> model : model_id
+audit_log ..> jobs : job_id
