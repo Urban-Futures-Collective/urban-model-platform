@@ -83,6 +83,22 @@ namespace Registry {
     +created_at : timestamptz
     +updated_at : timestamptz
   }
+  class project {
+    <<table>>
+    +id : uuid PK
+    +owner_sub : text FK
+    +name : text  UK[owner_sub, name]
+    +description : text
+    +created_at : timestamptz
+    +updated_at : timestamptz
+  }
+  class project_job {
+    <<table · n∶m>>
+    +project_id : uuid PK, FK  [on delete cascade]
+    +job_id : text PK, FK  [public.jobs.id, on delete cascade]
+    +added_by : text FK
+    +added_at : timestamptz
+  }
   class audit_log {
     <<append-only, 3 months>>
     +id : bigint PK
@@ -116,6 +132,10 @@ app_user "0..1" <-- "*" model : verified_by
 app_user "0..1" <-- "*" model : status_changed_by
 app_user "0..1" <-- "*" provider_server : owner
 app_user ..> KeycloakRealm : sub
+app_user "1" <-- "*" project : owner_sub
+project "1" <-- "*" project_job : contains
+jobs "1" <-- "*" project_job : grouped in
+app_user "1" <-- "*" project_job : added_by
 jobs ..> model : process_id = name∶remote_process_id
 jobs ..> app_user : user_id = sub
 audit_log ..> model : model_id
