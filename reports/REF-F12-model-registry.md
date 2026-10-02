@@ -366,11 +366,16 @@ through handlers (`_handle_process_id`, `_handle_fill_defaults`,
 drift. Discovery therefore uses `HttpClientPort` + `RemoteAuthPort` directly, not
 `ProcessManager.get_process`.
 
-**Interface hash.** SHA-256 over canonical JSON (sorted keys, no whitespace) of
-`{inputs, outputs, jobControlOptions, outputTransmission}` with `title`, `description`,
-`links` and `metadata` removed at every level. Text edits on the provider side do not
-change the hash; schema, cardinality and execution-mode changes do. The OGC `version` field
-is **not** used for detection — providers do not reliably bump it.
+**Interface hash.** SHA-256 over canonical JSON (sorted keys, no whitespace, UTF-8) of
+`{inputs, outputs, jobControlOptions, outputTransmission}`, where the keys `title`,
+`description`, `links` and `metadata` are removed from every **definition object** — each
+input/output definition and every nested schema object. They are **not** removed where keys
+are names rather than keywords: the `inputs`/`outputs` maps themselves and JSON-Schema
+`properties`, `patternProperties`, `$defs`, `definitions`. Otherwise an input or schema
+property that happens to be called `description` would disappear from the hash. Text edits
+on the provider side do not change the hash; schema, cardinality and execution-mode changes
+do. The OGC `version` field is **not** used for detection — providers do not reliably bump
+it.
 
 ## Interface drift (policy A)
 
@@ -610,7 +615,8 @@ no ordering dependence):
   `Content-Language` and `languages`; `?lang=*` returns full maps; discovery stores a
   second language only when the server answers `Accept-Language` differently;
 - interface hash: title/description/links changes → same hash; added input, changed
-  `minOccurs`, changed schema type → different hash; key order irrelevant;
+  `minOccurs`, changed schema type → different hash; key order irrelevant; an input or a
+  schema property **named** `description` is kept;
 - drift service with an in-test `HttpClientPort`: in_sync → drifted → restored;
   unreachable; audit event only on state change;
 - `ProviderConfigDbAdapter` produces `ProviderConfig` equal to what the file adapter produces
