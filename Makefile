@@ -19,7 +19,7 @@ CONDA_ACTIVATE=source $$(conda info --base)/etc/profile.d/conda.sh ; conda activ
 GIT_COMMIT := $(shell git rev-parse --short HEAD)
 
 run migrations:
-	PYTHONPATH=src UMP_DATABASE_URL=postgresql+asyncpg://ump:ump@api-db:5432/ump .venv/bin/alembic upgrade head
+	PYTHONPATH=src UMP_DATABASE_URL=postgresql+asyncpg://ump:ump@ump-db:5432/ump .venv/bin/alembic upgrade head
 
 initiate-dev:
 	@if [ ! -d ./.venv ]; then \
@@ -62,7 +62,7 @@ upload-image: build-image
 
 start-dev:
 	@ echo 'Starting development environment containers: ump database, geoserver database, geoserver, keycloak, keycloak database'
-	docker compose -f docker-compose-dev.yaml up -d api-db geoserver-db keycloak kc-db geoserver
+	docker compose -f docker-compose-dev.yaml up -d ump-db geoserver-db keycloak kc-db geoserver
 	
 	@ echo 'Waiting for databases to be ready'
 	sleep 10
