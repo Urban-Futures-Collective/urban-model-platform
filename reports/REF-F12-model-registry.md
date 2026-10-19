@@ -43,7 +43,7 @@ Artefacts:
 | D10 | **The registry catalogue follows `UMP_PUBLIC_PROCESSES`.** | `true`: published model cards are readable by anyone, including anonymous callers. `false`: `viewer` (or `user`) required. |
 | D11 | **Retention: 3 months** for the audit log. | Daily delete by `ump-retention`. See [Retention](#retention-3-months). |
 | D12 | **Minimal schema: four tables.** One row per model; descriptive model-card parts as JSONB; workflow rules in the core. | See [Simplification](#simplification-what-was-dropped-and-why). |
-| D13 | **Multilingual model cards** via language maps per field (`{"de": "…", "en": "…"}`), with a per-model default language that is always required. | No extra table; read API resolves one language with fallback. See [Multilingual content](#multilingual-content). |
+| D13 | **Multilingual model cards** via language maps per field (`{"en": "…", "de": "…"}`), with a per-model default language that is always required. English is the platform default. | No extra table; read API resolves one language with fallback. See [Multilingual content](#multilingual-content). |
 
 ## Simplification: what was dropped and why
 
@@ -213,19 +213,20 @@ foreign key, because it must outlive both.
 Providers may describe a model in several languages (D13).
 
 **Storage.** Every free-text model-card field is a language map `L`:
-`{"de": "Wachstum des Radnetzes", "en": "Bike network growth"}`. This applies to
+`{"en": "Bike network growth", "de": "Wachstum des Radnetzes"}`. This applies to
 `full_name`, `short_description`, `purpose`, `limitations_risks`, `keywords` (a list per
 language), `io_notes` values and the text fields inside `applications` and `test_cases`.
 Not translated: slug, licence, URLs, `code_ref`, `version_label`, contributor names,
 `process_config`.
 
 **Rules.**
-- `model.default_lang` (default `de`) is the language that is always complete. The
+- `model.default_lang` (default `en`) is the language that is always complete. The
   database enforces it for `full_name` from creation and for `purpose` before review; the
   core enforces it for all other `L` fields that are filled at all.
-- Allowed language codes come from `UMP_REGISTRY_LANGUAGES` (default `de,en`, matching
-  UMP-X's i18n). The core rejects other keys and empty strings; the database only checks
-  the `default_lang` format.
+- Allowed language codes come from `UMP_REGISTRY_LANGUAGES` (default `en,de`, matching
+  UMP-X's i18n). The first entry is the default for new models, so English is the
+  default language unless onboarding sets `default_lang` explicitly. The core rejects
+  other keys and empty strings; the database only checks the `default_lang` format.
 - One core type, `LocalizedText = dict[LangCode, NonEmptyStr]`, with a
   `resolve(lang, default_lang)` helper, is used for every `L` field.
 
@@ -249,7 +250,7 @@ default language only. The interface hash is computed from the default-language 
 per platform language (see the DDL comment).
 
 **Known limits.**
-- Translations can go stale: editing the German `purpose` does not mark the English one as
+- Translations can go stale: editing the English `purpose` does not mark the German one as
   outdated. The audit log records which language changed when, but nothing flags it in the
   UI (see open questions).
 - Translations are model-card content, so under D12 they are not reviewed; a wrong
