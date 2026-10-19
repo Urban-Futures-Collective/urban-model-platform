@@ -182,7 +182,7 @@ def _client(public: bool = False):
             fetch=NoFetch(),
             remote_auth=RemoteAuthAdapter(),
             cipher=None,
-            languages=["de", "en"],
+            languages=["en", "de"],
             public_catalogue=public,
         ),
     )
