@@ -196,7 +196,7 @@ def upgrade() -> None:
         sa.Column("remote_process_id", sa.Text(), nullable=False),
         sa.Column("owner_sub", sa.Text(), nullable=False),
         # model card; language maps ("L") must contain default_lang
-        sa.Column("default_lang", sa.Text(), nullable=False, server_default="de"),
+        sa.Column("default_lang", sa.Text(), nullable=False, server_default="en"),
         sa.Column("full_name", JSONB(), nullable=False),
         *(
             sa.Column(name, JSONB(), nullable=False, server_default=_json_default(kind))

@@ -20,8 +20,8 @@
 --     requirements, I/O notes, execution config) are JSONB documents,
 --     validated by Pydantic models in the core.
 --   * Free-text model-card fields are multilingual (D13): JSONB language maps
---     {"de": "…", "en": "…"} with a per-model default language that must
---     always be present. Allowed language codes are a platform setting
+--     {"en": "…", "de": "…"} with a per-model default language that must
+--     always be present (platform default: English). Allowed language codes are a platform setting
 --     (UMP_REGISTRY_LANGUAGES), checked in the core.
 --   * Workflow rules (allowed status transitions, who may perform them) live in
 --     the core. The database only keeps invariants that are cheap to state as
@@ -100,7 +100,7 @@ CREATE TABLE registry.model (
 
     -- model card ---------------------------------------------------------------
     -- L = language map {"<lang>": "<text>"} (D13); the default language is mandatory.
-    default_lang        text        NOT NULL DEFAULT 'de'
+    default_lang        text        NOT NULL DEFAULT 'en'
                         CHECK (default_lang ~ '^[a-z]{2,3}(-[A-Z]{2})?$'),   -- BCP 47 subset
     full_name           jsonb       NOT NULL,                  -- L
     short_description   jsonb       NOT NULL DEFAULT '{}'::jsonb,  -- L
