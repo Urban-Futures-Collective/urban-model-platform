@@ -21,6 +21,7 @@ from fastapi import APIRouter, Header, Query, Request, Response
 
 from ump.core.interfaces.auth import AuthContext
 from ump.core.interfaces.credential_cipher import CredentialCipherPort
+from ump.core.interfaces.job_repository import JobRepositoryPort
 from ump.core.interfaces.model_registry import ModelRegistryPort
 from ump.core.interfaces.providers import ProvidersPort
 from ump.core.interfaces.remote_auth import RemoteAuthPort
@@ -28,8 +29,11 @@ from ump.core.interfaces.safe_fetch import SafeFetchPort
 from ump.core.models.registry.card import (
     ModelCardPatch,
     ModelsCreate,
+    OwnerTransfer,
+    ReverifyRequest,
     ServerCreate,
     ServerPatch,
+    TransitionRequest,
 )
 from ump.core.models.registry.etag import etag_for
 from ump.core.models.registry.localized import parse_accept_language
@@ -49,6 +53,7 @@ from ump.core.services.registry_cards import RegistryCardService
 from ump.core.services.registry_catalog import RegistryCatalogService
 from ump.core.services.registry_onboarding import RegistryOnboardingService
 from ump.core.services.registry_servers import RegistryServerService
+from ump.core.services.registry_verification import RegistryVerificationService
 
 
 @dataclass
@@ -60,6 +65,7 @@ class RegistryServices:
     accounts: RegistryAccountService
     onboarding: RegistryOnboardingService
     cards: RegistryCardService
+    verification: RegistryVerificationService
 
     @classmethod
     def create(
@@ -72,6 +78,7 @@ class RegistryServices:
         cipher: CredentialCipherPort | None,
         languages: Sequence[str],
         public_catalogue: bool,
+        jobs: JobRepositoryPort,
     ) -> "RegistryServices":
         """Assemble the core services from injected ports (no adapters built here)."""
         catalog = RegistryCatalogService(registry, authorization, public_catalogue)
@@ -94,6 +101,16 @@ class RegistryServices:
                 authorization=authorization,
                 providers=providers,
                 languages=languages,
+            ),
+            verification=RegistryVerificationService(
+                registry,
+                jobs=jobs,
+                catalog=catalog,
+                authorization=authorization,
+                providers=providers,
+                fetch=fetch,
+                remote_auth=remote_auth,
+                cipher=cipher,
             ),
         )
 
@@ -177,6 +194,60 @@ def create_registry_router(
         if_match: Optional[str] = Header(None),
     ) -> ModelCardView:
         view = await services.cards.update_card(
+            await caller(request), model_id, body, if_match
+        )
+        response.headers["ETag"] = etag_for(view.updated_at)
+        return view
+
+    @router.post(
+        "/models/{model_id}/transitions",
+        response_model=ModelCardView,
+        summary="Move a model through the review workflow",
+    )
+    async def transition(
+        model_id: UUID,
+        body: TransitionRequest,
+        request: Request,
+        response: Response,
+        if_match: Optional[str] = Header(None),
+    ) -> ModelCardView:
+        view = await services.verification.transition(
+            await caller(request), model_id, body, if_match
+        )
+        response.headers["ETag"] = etag_for(view.updated_at)
+        return view
+
+    @router.post(
+        "/models/{model_id}/reverify",
+        response_model=ModelCardView,
+        summary="Re-verify a verified/published model against its current interface",
+    )
+    async def reverify(
+        model_id: UUID,
+        body: ReverifyRequest,
+        request: Request,
+        response: Response,
+        if_match: Optional[str] = Header(None),
+    ) -> ModelCardView:
+        view = await services.verification.reverify(
+            await caller(request), model_id, body, if_match
+        )
+        response.headers["ETag"] = etag_for(view.updated_at)
+        return view
+
+    @router.patch(
+        "/models/{model_id}/owner",
+        response_model=ModelCardView,
+        summary="Transfer a model to another account (platform admin)",
+    )
+    async def transfer_owner(
+        model_id: UUID,
+        body: OwnerTransfer,
+        request: Request,
+        response: Response,
+        if_match: Optional[str] = Header(None),
+    ) -> ModelCardView:
+        view = await services.verification.transfer_owner(
             await caller(request), model_id, body, if_match
         )
         response.headers["ETag"] = etag_for(view.updated_at)

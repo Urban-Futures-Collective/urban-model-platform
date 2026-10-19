@@ -73,6 +73,7 @@ def _app(with_registry: bool):
             cipher=None,
             languages=["de", "en"],
             public_catalogue=False,
+            jobs=InMemoryJobRepository("scratch/test_registry_jobs"),
         )
     # openapi() never runs the lifespan, so the factories are never called
     return create_app(

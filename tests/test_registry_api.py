@@ -184,6 +184,7 @@ def _client(public: bool = False):
             cipher=None,
             languages=["de", "en"],
             public_catalogue=public,
+            jobs=InMemoryJobRepository("scratch/test_registry_jobs"),
         ),
     )
     return TestClient(app), repo, seeded

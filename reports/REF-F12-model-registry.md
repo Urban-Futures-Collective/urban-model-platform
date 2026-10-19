@@ -699,7 +699,34 @@ whose DNS later points at an internal address would be reached by forwarded exec
 drift check (phase D) re-validates `base_url` periodically; pinning execution traffic would
 need the guarded resolver in `AioHttpClientAdapter` too.
 
-Not yet: phases C–E of the registry API, drift checks, retention.
+**Registry API phase C is implemented** (branch `v3.0.0alpha/registry-api-phase-c`):
+`POST /models/{id}/transitions`, `POST /models/{id}/reverify`, `PATCH /models/{id}/owner`.
+
+- The status graph and role rules are pure core logic (`core/models/registry/workflow.py`,
+  exhaustively tested): `owner` steps need the owner holding `provider`; `reviewer` steps a
+  `verifier` who is not the owner (four-eyes, also for an owner who holds `verifier`);
+  deactivation a `verifier` or `platform-admin`.
+- Choices taken in implementation: **a note is required** for `changes_requested`,
+  `rejected`, the `published → in_review` reset and every deactivation (the other side needs
+  the reason); **the card must be complete** (`purpose` in `default_lang`, `license`) already
+  at `submitted`, so the owner learns it when submitting rather than at pick-up;
+  `status_note` holds the note of the latest step.
+- **Verification job check (decided 2026-10-19):** `verified` and `reverify` need a
+  `verification_job_id` that exists in UMP's job store, was started by the verifier, ran
+  this model (`{provider}:{process}`), finished `successful`, and was started after the
+  current review round began (after the last verification, for `reverify`).
+- On `verified` / `reverify` the current raw description is fetched through `SafeFetchPort`
+  **in the model's default language** (the hash is defined on that response) and stored as
+  `verified_interface` + hash; `interface_state = in_sync`.
+- `published_at` is set on the first publication only (role vocabulary, D8). Steps that
+  change `exec_state` reload the provider snapshot, so `/v1.0` sees publish, reset and
+  deactivation at once. `If-Match` is optional on the POSTs and required on `PATCH /owner`.
+- Owner transfer (platform admin) refuses a new owner who verified the model (four-eyes).
+- A Postgres end-to-end test runs register → discover → drafts → card edit → submit →
+  review → verify → publish on the real adapters; every write passes the 0003 CHECKs and the
+  model appears in `v_providers_config`.
+
+Not yet: phases D–E of the registry API, drift checks, retention.
 
 ## Implementation phases
 

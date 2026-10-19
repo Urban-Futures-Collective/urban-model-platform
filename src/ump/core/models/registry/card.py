@@ -202,3 +202,18 @@ class ModelCardPatch(_Shape):
             raise CardError("license: not an SPDX license expression")
         if self.default_lang is not None and self.default_lang not in languages:
             raise CardError(f"default_lang must be one of {sorted(languages)}")
+
+
+class TransitionRequest(_Shape):
+    to_status: str
+    note: str | None = Field(default=None, max_length=4000)
+    verification_job_id: str | None = None  # required for 'verified'
+
+
+class ReverifyRequest(_Shape):
+    verification_job_id: str
+    note: str | None = Field(default=None, max_length=4000)
+
+
+class OwnerTransfer(_Shape):
+    owner_sub: str = Field(min_length=1)

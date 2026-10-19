@@ -18,7 +18,6 @@ Every user-supplied URL goes through ``SafeFetchPort``. Every write carries an
 
 from __future__ import annotations
 
-import json
 import logging
 from datetime import datetime, timezone
 from typing import Any, Callable, Sequence
@@ -28,7 +27,6 @@ from ump.core.exceptions import OGCProcessException
 from ump.core.interfaces.auth import AuthContext
 from ump.core.interfaces.credential_cipher import (
     CredentialCipherPort,
-    CredentialDecryptionError,
 )
 from ump.core.interfaces.model_registry import (
     ModelQuery,
@@ -39,14 +37,7 @@ from ump.core.interfaces.model_registry import (
 from ump.core.interfaces.providers import ProvidersPort
 from ump.core.interfaces.remote_auth import RemoteAuthPort
 from ump.core.interfaces.safe_fetch import (
-    RemoteFetchError,
     SafeFetchPort,
-    UnsafeUrlError,
-)
-from ump.core.models.providers_config import (
-    AuthConfig,
-    NoAuthConfig,
-    auth_config_from_secret,
 )
 from ump.core.models.registry import (
     SLUG_PATTERN,
@@ -68,16 +59,13 @@ from ump.core.models.registry.views import (
 )
 from ump.core.services.authorization import AuthorizationService
 from ump.core.services.registry_common import check_if_match, owns_server, problem
+from ump.core.services.registry_remote import RegistryRemote
 from ump.core.services.registry_servers import server_view
 
 logger = logging.getLogger(__name__)
 
 # Server fields recorded in audit details; credentials only as a marker.
 _AUDITED_SERVER_FIELDS = ("base_url", "auth_type", "ttw_job_done_seconds", "is_active")
-
-
-def _with_slash(url: str) -> str:
-    return url if url.endswith("/") else url + "/"
 
 
 class RegistryOnboardingService:
@@ -95,9 +83,7 @@ class RegistryOnboardingService:
         if not languages:
             raise ValueError("at least one registry language is required")
         self._registry = registry
-        self._fetch = fetch
-        self._remote_auth = remote_auth
-        self._cipher = cipher
+        self._remote = RegistryRemote(fetch, remote_auth, cipher)
         self._authz = authorization
         self._providers = providers
         self._languages = list(languages)
@@ -118,8 +104,8 @@ class RegistryOnboardingService:
                 "name: lower-case letters, digits and single hyphens only; it "
                 "prefixes process ids and roles and cannot be changed later",
             )
-        base_url = self._safe_url(str(body.base_url))
-        auth_type, credentials = self._encrypt(body.authentication)
+        base_url = self._remote.safe_url(str(body.base_url))
+        auth_type, credentials = self._remote.encrypt(body.authentication)
 
         server = ProviderServer(
             name=body.name,
@@ -161,9 +147,9 @@ class RegistryOnboardingService:
         changes: dict[str, Any] = {}
         sent = patch.model_fields_set
         if "base_url" in sent and patch.base_url is not None:
-            changes["base_url"] = self._safe_url(str(patch.base_url))
+            changes["base_url"] = self._remote.safe_url(str(patch.base_url))
         if "authentication" in sent:
-            changes["auth_type"], changes["credentials"] = self._encrypt(
+            changes["auth_type"], changes["credentials"] = self._remote.encrypt(
                 patch.authentication
             )
         if "ttw_job_done_seconds" in sent and patch.ttw_job_done_seconds is not None:
@@ -195,7 +181,7 @@ class RegistryOnboardingService:
 
     async def discover(self, auth: AuthContext, server_id: UUID) -> DiscoveryResult:
         server = await self._owned_server(auth, server_id)
-        listing = await self._get(server, "processes")
+        listing = await self._remote.get(server, "processes")
         entries = listing.get("processes") if isinstance(listing, dict) else None
         if not isinstance(entries, list):
             raise problem(
@@ -285,7 +271,7 @@ class RegistryOnboardingService:
         lang: str,
         taken_slugs: set[str],
     ) -> RegistryModel:
-        description = await self._get(server, f"processes/{pid}", lang=lang)
+        description = await self._remote.get(server, f"processes/{pid}", lang=lang)
         if not isinstance(description, dict):
             raise problem(
                 502, "Bad Gateway", f"Process '{pid}' description is not a JSON object."
@@ -294,7 +280,7 @@ class RegistryOnboardingService:
         for other in self._languages:
             if other != lang:
                 try:
-                    texts[other] = await self._get(
+                    texts[other] = await self._remote.get(
                         server, f"processes/{pid}", lang=other
                     )
                 except OGCProcessException:
@@ -366,61 +352,6 @@ class RegistryOnboardingService:
                 "Precondition Failed",
                 "The server was changed concurrently; reload and retry.",
             )
-
-    def _safe_url(self, url: str) -> str:
-        url = _with_slash(url)
-        try:
-            self._fetch.check_url(url)
-        except UnsafeUrlError as exc:
-            raise problem(400, "Bad Request", f"base_url not allowed: {exc}")
-        return url
-
-    def _encrypt(self, auth: AuthConfig | None) -> tuple[str, bytes | None]:
-        if auth is None or isinstance(auth, NoAuthConfig):
-            return "NoAuth", None
-        if self._cipher is None:
-            raise problem(
-                503,
-                "Service Unavailable",
-                "Credential storage is not configured (UMP_REGISTRY_CREDENTIALS_KEY).",
-            )
-        secret = {
-            k: v.get_secret_value() if hasattr(v, "get_secret_value") else v
-            for k, v in auth
-            if k != "type"
-        }
-        return auth.type, self._cipher.encrypt(json.dumps(secret))
-
-    def _outbound_auth(self, server: ProviderServer) -> AuthConfig:
-        if server.auth_type == "NoAuth" or server.credentials is None:
-            return NoAuthConfig()
-        if self._cipher is None:
-            raise problem(
-                503,
-                "Service Unavailable",
-                "Credential storage is not configured (UMP_REGISTRY_CREDENTIALS_KEY).",
-            )
-        try:
-            secret = json.loads(self._cipher.decrypt(server.credentials))
-        except CredentialDecryptionError:
-            raise problem(
-                409,
-                "Conflict",
-                "Stored credentials cannot be decrypted; set them again.",
-            )
-        return auth_config_from_secret(server.auth_type, secret)
-
-    async def _get(self, server: ProviderServer, path: str, lang: str | None = None):
-        headers = dict(self._remote_auth.resolve(self._outbound_auth(server)).headers)
-        if lang:
-            headers["Accept-Language"] = lang
-        url = server.base_url + path
-        try:
-            return await self._fetch.get_json(url, headers=headers)
-        except UnsafeUrlError as exc:
-            raise problem(400, "Bad Request", f"{url} not allowed: {exc}")
-        except RemoteFetchError as exc:
-            raise problem(502, "Bad Gateway", f"{url}: {exc}")
 
 
 def _created(model: RegistryModel) -> CreatedModel:
