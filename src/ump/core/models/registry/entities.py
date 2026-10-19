@@ -17,10 +17,6 @@ from pydantic import BaseModel, Field
 # Slug / provider-name rule, identical to the CHECK constraints in 0003.
 SLUG_PATTERN = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
 
-# Actor recorded for changes made by `ump-import-providers`: the processes were
-# already vetted by whoever maintained providers.yaml, so the import records
-# them as published and verified by this system account.
-IMPORT_ACTOR_SUB = "ump:providers-import"
 
 ModelStatus = Literal[
     "draft",
