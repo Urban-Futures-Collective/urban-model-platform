@@ -81,12 +81,16 @@ class TestProvidersAdapter(ProvidersPort):
 
     def get_process_config(self, provider_name: str, process_id: str):
         # Return a minimal test process config with ttw_job_done inherited from provider
+        # Every process of the test provider counts as configured (P1)
         class TestProcessConfig:
-            def __init__(self, ttw_job_done=None):
+            def __init__(self, process_id: str, ttw_job_done=None):
+                self.id = process_id.split(":", 1)[-1]  # verbatim remote id
+                self.exclude = False
+                self.state = "published"
                 self.ttw_job_done = ttw_job_done  # None means use provider default
                 self.poll_interval = None
 
-        return TestProcessConfig(ttw_job_done=None)  # pragma: no cover
+        return TestProcessConfig(process_id, ttw_job_done=None)
 
     def list_providers(self):
         return [self._provider.name]

@@ -250,3 +250,23 @@ SELECT ps.id                   AS provider_server_id,
  WHERE ps.is_active
    AND m.exec_state IS NOT NULL
  GROUP BY ps.id;
+
+
+-- -----------------------------------------------------------------------------
+-- Change notification for ProviderConfigDbAdapter. Every worker LISTENs on
+-- `ump_providers_changed` and rebuilds its in-memory provider snapshot, so a
+-- deactivation (D9) reaches all workers at once. Statement-level triggers:
+-- one notification per statement; Postgres folds duplicates per transaction.
+-- -----------------------------------------------------------------------------
+CREATE FUNCTION registry.notify_providers_changed() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+    PERFORM pg_notify('ump_providers_changed', TG_TABLE_NAME);
+    RETURN NULL;
+END $$;
+CREATE TRIGGER trg_provider_server_notify
+    AFTER INSERT OR UPDATE OR DELETE OR TRUNCATE ON registry.provider_server
+    FOR EACH STATEMENT EXECUTE FUNCTION registry.notify_providers_changed();
+CREATE TRIGGER trg_model_notify
+    AFTER INSERT OR UPDATE OR DELETE OR TRUNCATE ON registry.model
+    FOR EACH STATEMENT EXECUTE FUNCTION registry.notify_providers_changed();

@@ -246,14 +246,25 @@ class ProcessManager(ProcessesPort):
         except ValueError:
             return canonical_id
 
+    @staticmethod
+    def _is_listable(proc_cfg) -> bool:
+        """Excluded and deactivated processes are never listed or described.
+
+        Processes under review are listed here; hiding them from non-verifiers
+        is the AuthorizationService's call, since it needs the caller's roles.
+        """
+        return not getattr(proc_cfg, "exclude", False) and (
+            getattr(proc_cfg, "state", "published") != "deactivated"
+        )
+
     def _configured_process_ids(self, provider_name: str) -> List[tuple[str, str]]:
-        """Return (remote_id, canonical_id) pairs for all non-excluded processes."""
+        """Return (remote_id, canonical_id) pairs for all listable processes."""
         provider = self.provider_config_service.get_provider(provider_name)
         result: List[tuple[str, str]] = []
         if provider is None:
             return result
         for proc_cfg in provider.processes:
-            if getattr(proc_cfg, "exclude", False):
+            if not self._is_listable(proc_cfg):
                 continue
             remote_id = proc_cfg.id  # verbatim; used in the remote URL
             canonical_id = self._to_canonical_id(provider_name, remote_id)
@@ -318,7 +329,7 @@ class ProcessManager(ProcessesPort):
         for provider_name in self.provider_config_service.list_providers():
             provider = self.provider_config_service.get_provider(provider_name)
             for proc_cfg in provider.processes:
-                if getattr(proc_cfg, "exclude", False):
+                if not self._is_listable(proc_cfg):
                     continue
                 # Match against the remote ID or the canonical ID
                 if (
@@ -425,6 +436,20 @@ class ProcessManager(ProcessesPort):
                         title="Not Found",
                         status=404,
                         detail=f"Provider '{provider_name}' is not configured",
+                        instance=None,
+                    )
+                )
+
+            process_cfg = self.provider_config_service.get_process_config(
+                provider_name, process_id
+            )
+            if process_cfg is not None and not self._is_listable(process_cfg):
+                raise OGCProcessException(
+                    OGCExceptionResponse(
+                        type="about:blank",
+                        title="Not Found",
+                        status=404,
+                        detail=f"Process '{process_id}' not found",
                         instance=None,
                     )
                 )

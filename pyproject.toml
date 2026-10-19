@@ -51,6 +51,7 @@ package-mode = true
 [tool.poetry.scripts]
 ump         = "ump.cli:main"
 ump-migrate = "ump.cli:migrate"
+ump-import-providers = "ump.cli:import_providers"
 
 [tool.poetry.urls]
 Homepage = "https://citysciencelab.github.io/urban-model-platform"

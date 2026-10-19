@@ -15,6 +15,8 @@ gets its own adapter instances (file watchers, HTTP clients, DB connections).
 
 import os
 
+from sqlalchemy.ext.asyncio import create_async_engine
+
 from ump.adapters.aiohttp_client_adapter import AioHttpClientAdapter
 from ump.adapters.colon_process_id_validator import ColonProcessId
 from ump.adapters.job_repository_inmemory import InMemoryJobRepository
@@ -26,8 +28,10 @@ from ump.adapters.remote_auth_adapter import RemoteAuthAdapter
 from ump.adapters.retry_tenacity import TenacityRetryAdapter
 from ump.adapters.site_info_static_adapter import StaticSiteInfoAdapter
 from ump.adapters.web.fastapi import create_app
+from ump.composition import build_credential_cipher, construct_database_url
 from ump.core.config import JobManagerConfig
 from ump.core.interfaces.job_repository import JobRepositoryPort
+from ump.core.interfaces.providers import ProvidersPort
 from ump.core.logging_config import configure_logging
 from ump.core.managers.job_manager import JobManager
 from ump.core.managers.observers import (
@@ -57,28 +61,6 @@ set_logger(LoggingAdapter("ump", app_settings.UMP_LOG_LEVEL))
 # ---------------------------------------------------------------------------
 # Factories for core managers (one set per worker process)
 # ---------------------------------------------------------------------------
-def construct_database_url() -> str:
-    if app_settings.UMP_DATABASE_URL:
-        return app_settings.UMP_DATABASE_URL
-    
-    if not (app_settings.UMP_DATABASE_HOST and app_settings.UMP_DATABASE_NAME):
-
-        raise RuntimeError(
-            "UMP_DATABASE_HOST and UMP_DATABASE_NAME "
-            "must be set if UMP_DATABASE_URL is not provided."
-        )
-
-    user: str = app_settings.UMP_DATABASE_USER
-    password: str = app_settings.UMP_DATABASE_PASSWORD.get_secret_value() if app_settings.UMP_DATABASE_PASSWORD else ""
-    host: str = app_settings.UMP_DATABASE_HOST
-    port: int = app_settings.UMP_DATABASE_PORT
-    name: str = app_settings.UMP_DATABASE_NAME
-
-    return (
-        f"postgresql+asyncpg://{user}:{password}"
-        f"@{host}:{port}/{name}"
-    )
-
 def _process_manager_factory(client):
     return ProcessManager(
         providers_port,
@@ -127,11 +109,29 @@ def _job_manager_factory(client, process_manager):
 # Infrastructure adapters (one set per worker process)
 # ---------------------------------------------------------------------------
 
-_config_path = os.path.abspath(
-    app_settings.UMP_PROVIDERS_FILE
+# One engine (connection pool) per worker, shared by every database adapter.
+_needs_database = (
+    app_settings.UMP_JOB_STORE == "postgres" or app_settings.UMP_PROVIDERS_SOURCE == "db"
 )
-providers_port = ProviderConfigFileAdapter(_config_path)
-providers_port.start_file_watcher()
+engine = create_async_engine(construct_database_url()) if _needs_database else None
+
+# Async context managers the web lifespan keeps running while the app serves.
+lifecycle: list = []
+
+providers_port: ProvidersPort
+if app_settings.UMP_PROVIDERS_SOURCE == "db":
+    from ump.adapters.provider_config_db_adapter import ProviderConfigDbAdapter
+
+    providers_port = ProviderConfigDbAdapter(
+        engine,
+        cipher=build_credential_cipher(),
+        poll_interval=app_settings.UMP_PROVIDERS_DB_POLL_INTERVAL,
+    )
+    lifecycle.append(providers_port)
+else:
+    _config_path = os.path.abspath(app_settings.UMP_PROVIDERS_FILE)
+    providers_port = ProviderConfigFileAdapter(_config_path)
+    providers_port.start_file_watcher()
 
 http_client = AioHttpClientAdapter()
 process_id_validator = ColonProcessId()
@@ -143,9 +143,7 @@ if app_settings.UMP_JOB_STORE == "postgres":
     from ump.adapters.job_repository_sql import SQLModelJobRepository
     from ump.adapters.poll_lock_pg import PgAdvisoryPollLock
 
-    database_url = construct_database_url()
-
-    _sql_repo = SQLModelJobRepository(database_url)
+    _sql_repo = SQLModelJobRepository(engine=engine)
     job_repo: JobRepositoryPort = _sql_repo
     poll_lock = PgAdvisoryPollLock(_sql_repo._session_factory)
 else:
@@ -167,4 +165,5 @@ app = create_app(
     authorization_service=authorization_service,
     site_info=StaticSiteInfoAdapter(),
     tool_catalog_factory=_tool_catalog_factory,
+    lifecycle=lifecycle,
 )

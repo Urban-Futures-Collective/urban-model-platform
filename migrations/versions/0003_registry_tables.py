@@ -10,7 +10,8 @@ Model registry (REF-F12), in its own schema `registry`:
   - model             one remote process: model card, execution config,
                       review status, verified interface, drift state
   - audit_log         append-only activity log, 3-month retention
-plus the view v_providers_config (source for ProviderConfigDbAdapter).
+plus the view v_providers_config (source for ProviderConfigDbAdapter) and
+triggers that NOTIFY `ump_providers_changed` when servers or models change.
 
 Follows reports/REF-F12-registry-schema.sql and docs/diagrams/model-registry-uml.mmd.
 public.jobs is not changed: it joins via
@@ -34,6 +35,10 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 SCHEMA = "registry"
+
+# LISTEN channel of ProviderConfigDbAdapter; keep both in sync.
+PROVIDERS_CHANNEL = "ump_providers_changed"
+NOTIFY_TABLES = ("provider_server", "model")
 
 SLUG_PATTERN = "'^[a-z0-9]+(-[a-z0-9]+)*$'"
 SHA256_PATTERN = "'^[0-9a-f]{64}$'"
@@ -432,8 +437,30 @@ def upgrade() -> None:
          GROUP BY ps.id
         """)
 
+    # Tell every worker's ProviderConfigDbAdapter to rebuild its snapshot when
+    # servers or models change, so e.g. a deactivation takes effect at once
+    # (D9). Statement-level: one notification per statement, not per row;
+    # Postgres also folds identical notifications within a transaction.
+    op.execute(f"""
+        CREATE FUNCTION {SCHEMA}.notify_providers_changed() RETURNS trigger
+        LANGUAGE plpgsql AS $$
+        BEGIN
+            PERFORM pg_notify('{PROVIDERS_CHANNEL}', TG_TABLE_NAME);
+            RETURN NULL;
+        END $$
+        """)
+    for table in NOTIFY_TABLES:
+        op.execute(f"""
+            CREATE TRIGGER trg_{table}_notify
+                AFTER INSERT OR UPDATE OR DELETE OR TRUNCATE ON {SCHEMA}.{table}
+                FOR EACH STATEMENT EXECUTE FUNCTION {SCHEMA}.notify_providers_changed()
+            """)
+
 
 def downgrade() -> None:
+    for table in NOTIFY_TABLES:
+        op.execute(f"DROP TRIGGER trg_{table}_notify ON {SCHEMA}.{table}")
+    op.execute(f"DROP FUNCTION {SCHEMA}.notify_providers_changed()")
     op.execute(f"DROP VIEW {SCHEMA}.v_providers_config")
     op.execute(f"DROP TRIGGER trg_audit_guard ON {SCHEMA}.audit_log")
     op.execute(f"DROP FUNCTION {SCHEMA}.audit_log_guard()")

@@ -44,6 +44,7 @@ from ump.core.managers.status_derivation_orchestrator import (
 from ump.core.models.job import Job, JobStatusInfo, StatusCode
 from ump.core.models.link import Link
 from ump.core.models.ogcp_exception import OGCExceptionResponse
+from ump.core.models.providers_config import canonical_process_id
 from ump.core.settings import logger
 
 REQUIRED_STATUS_FIELDS = {"jobID", "status", "type"}
@@ -192,15 +193,19 @@ async def _notify_observers_completed(
 
 
 class ValidateAndResolveStep(PipelineStep):
-    """Validate process_id format and resolve provider prefix + remote process id.
+    """Validate process_id and resolve it to a configured, runnable process.
 
     Sets: context.provider, context.provider_process_id
-    Halts: on unknown provider or invalid process_id
+    Halts: 404 on an unknown provider, or a process that is not configured or
+           is excluded (REF-F12 prerequisite P1 — the provider's role must not
+           open processes nobody configured); 403 on a deactivated process
+           (D9). Review-only access (state ``in_review``) needs the caller's
+           roles and is enforced by ``AuthorizationService``.
 
     ``context.provider_process_id`` is the **verbatim configured remote ID**
-    (from providers.yaml), not the bare id stripped of provider prefix.
-    This is important when the remote server is another UMP instance whose
-    process IDs contain colons (e.g. ``fair2adapt:pluvial-flood-risk-regional``).
+    (from the provider configuration), not the bare id stripped of provider
+    prefix. This is important when the remote server is another UMP instance
+    whose process IDs contain colons (e.g. ``fair2adapt:pluvial-flood-risk-regional``).
     """
 
     def __init__(
@@ -209,55 +214,59 @@ class ValidateAndResolveStep(PipelineStep):
         self._validator = validator
         self._providers = providers
 
-    def _find_remote_id(self, provider_name: str, canonical_id: str) -> str:
-        """Return the verbatim configured remote ID for a canonical UMP process ID."""
-        provider = self._providers.get_provider(provider_name)
-        if provider:
-            for proc_cfg in provider.processes:
-                configured_id = proc_cfg.id
-                # Derive what the canonical ID would be for this configured ID
-                expected_canonical = (
-                    configured_id
-                    if configured_id.startswith(f"{provider_name}:")
-                    else f"{provider_name}:{configured_id}"
-                )
-                if expected_canonical == canonical_id:
-                    return configured_id
-        # Fallback: strip provider prefix (non-UMP remote using bare IDs)
-        try:
-            _, bare = canonical_id.split(":", 1)
-            return bare
-        except ValueError:
-            return canonical_id
+    def _resolve_bare_id(self, bare_id: str) -> Optional[tuple[str, str]]:
+        """(provider, canonical id) of the first configured process with this id."""
+        for name in self._providers.list_providers():
+            provider = self._providers.get_provider(name)
+            for proc_cfg in provider.processes if provider else []:
+                canonical = canonical_process_id(name, proc_cfg.id)
+                if bare_id in (proc_cfg.id, canonical):
+                    return name, canonical
+        return None
 
     async def process(self, context: JobExecutionContext) -> None:
+        canonical_id = context.process_id
         try:
-            provider_prefix, _ = self._validator.extract(context.process_id)
+            provider_prefix, _ = self._validator.extract(canonical_id)
         except ValueError:
-            # Bare id — try first available provider as fallback
-            names = self._providers.list_providers()
-            if not names:
+            resolved = self._resolve_bare_id(canonical_id)
+            if resolved is None:
                 _halt(
                     context,
                     404,
                     "Not Found",
-                    f"No providers configured for '{context.process_id}'",
+                    f"Process '{context.process_id}' not found",
                 )
                 return
-            provider_prefix = names[0]
+            provider_prefix, canonical_id = resolved
 
         provider = self._providers.get_provider(provider_prefix)
         if provider is None:
             _halt(context, 404, "Not Found", f"Provider '{provider_prefix}' not found")
             return
 
-        # Use verbatim configured remote ID, not the bare stripped id
-        remote_id = self._find_remote_id(provider_prefix, context.process_id)
+        proc_cfg = self._providers.get_process_config(provider_prefix, canonical_id)
+        if proc_cfg is None or proc_cfg.exclude:
+            _halt(
+                context,
+                404,
+                "Not Found",
+                f"Process '{context.process_id}' not found",
+            )
+            return
+        if proc_cfg.state == "deactivated":
+            _halt(
+                context,
+                403,
+                "Model deactivated",
+                f"Process '{context.process_id}' is deactivated and cannot be run.",
+            )
+            return
 
         context.provider = provider
-        context.provider_process_id = remote_id
+        context.provider_process_id = proc_cfg.id
         logger.debug(
-            f"[step:resolve] process_id={context.process_id} provider={provider_prefix} remote_id={remote_id}"
+            f"[step:resolve] process_id={context.process_id} provider={provider_prefix} remote_id={proc_cfg.id}"
         )
 
 

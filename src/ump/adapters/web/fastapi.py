@@ -1,8 +1,8 @@
 # ump/adapters/web/fastapi.py
 import uuid
-from contextlib import asynccontextmanager
+from contextlib import AbstractAsyncContextManager, AsyncExitStack, asynccontextmanager
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable, Sequence
 
 from fastapi import APIRouter, FastAPI, Request
 from fastapi.encoders import jsonable_encoder
@@ -123,12 +123,18 @@ def create_app(
     site_info: SiteInfoPort | None = None,
     tool_catalog_factory: Callable[[ProcessManager], ToolCatalogService]
     | None = None,
+    lifecycle: Sequence[AbstractAsyncContextManager[Any]] = (),
 ):
     """Create the FastAPI app.
 
     Adapters and concrete infrastructure (logging, repositories, providers) are
     assembled outside and passed as factories. This keeps the web adapter focused
     purely on HTTP concerns and lifecycle orchestration.
+
+    ``lifecycle`` are async context managers the composition root needs running
+    while the app serves (e.g. the db providers adapter's initial load and
+    background refresh). They are entered in order before the HTTP client and
+    any request, and exited in reverse order on shutdown.
     """
 
     # We intentionally do NOT configure logging here. Composition root (main)
@@ -137,6 +143,14 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        async with AsyncExitStack() as stack:
+            for resource in lifecycle:
+                await stack.enter_async_context(resource)
+            async with _serve(app):
+                yield
+
+    @asynccontextmanager
+    async def _serve(app: FastAPI):
         async with http_client as client:
             process_port = process_manager_factory(client)
             if process_port is None:
@@ -288,7 +302,16 @@ def create_app(
                         instance=str(request.url),
                     )
                 )
-        return await app.state.process_port.get_all_processes()
+        process_list = await app.state.process_port.get_all_processes()
+        if app.state.authz is not None:
+            # Processes under review are only listed for verifiers (REF-F12 D7)
+            auth = await _get_auth(request)
+            process_list.processes = [
+                p
+                for p in process_list.processes
+                if app.state.authz.can_list_process(auth, p.pid)
+            ]
+        return process_list
 
     @api_router.get(
         "/processes/{process_id}",
@@ -315,6 +338,18 @@ def create_app(
                         instance=str(request.url),
                     )
                 )
+        if app.state.authz is not None and not app.state.authz.can_list_process(
+            await _get_auth(request), process_id
+        ):
+            raise OGCProcessException(
+                OGCExceptionResponse(
+                    type="about:blank",
+                    title="Not Found",
+                    status=404,
+                    detail=f"Process '{process_id}' not found",
+                    instance=str(request.url),
+                )
+            )
         return await app.state.process_port.get_process(process_id)
 
     @api_router.get("/jobs", response_model=JobList, response_model_exclude_none=True)

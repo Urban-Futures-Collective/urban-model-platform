@@ -22,7 +22,7 @@ from ump.core.managers.observers import (
     StatusHistoryObserver,
 )
 from ump.core.managers.process_manager import ProcessManager
-from ump.core.models.providers_config import ProviderConfig
+from ump.core.models.providers_config import ProcessConfig, ProviderConfig
 
 
 class SimpleProvider:
@@ -47,7 +47,8 @@ class SimpleProviders(ProvidersPort):
         )
 
     def get_process_config(self, provider_name: str, process_id: str):
-        raise NotImplementedError
+        # Every process of the fake provider counts as configured (P1)
+        return ProcessConfig(id=process_id.split(":", 1)[-1])
 
     def list_providers(self):
         return [self._provider.name]

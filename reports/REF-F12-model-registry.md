@@ -587,6 +587,38 @@ tested on PostgreSQL 16 (4 tables, credential rule, generated `exec_state`, four
 card-completeness checks, default-language checks and fallback, keyword search per
 language, JSONB type checks, provider view, audit guard and retention delete). The migration can execute it largely verbatim via `op.execute`.
 
+## Implementation status
+
+**Phase 0 (P1) and phase 2 are implemented**, plus the slice of phase 1 the import needs
+(branch `v3.0.0alpha/providers-db-adapter`):
+
+- **P1** — `ValidateAndResolveStep` halts with 404 for unconfigured/excluded processes (bare
+  ids resolve only to configured processes; the bare-id fallback is gone) and with 403
+  `Model deactivated` for deactivated ones.
+- **State rules (D7, D9)** — `ProcessConfig.state` (default `published`);
+  `AuthorizationService` refuses `deactivated` before the anonymous-access shortcut, admits
+  only `verifier` for `in_review`, and admits `verifier` for `published` too.
+  `can_list_process` hides `in_review` from non-verifiers in `GET /processes[/{id}]`;
+  `ProcessManager` never lists or describes `deactivated` processes.
+- **`ProviderConfigDbAdapter`** (`UMP_PROVIDERS_SOURCE=db`) — in-memory `ProvidersSnapshot`
+  (core; also used by the file adapter) rebuilt on startup, on `ump_providers_changed`
+  (triggers added to migration 0003), every `UMP_PROVIDERS_DB_POLL_INTERVAL` seconds as
+  fallback, and on `load_providers()`. Entered through the new `create_app(lifecycle=…)`
+  hook; one engine per worker is shared with the job repository.
+- **Credentials** — `CredentialCipherPort` + `FernetCredentialCipher`.
+  `UMP_REGISTRY_CREDENTIALS_KEY` takes comma-separated keys (first encrypts, all decrypt —
+  `MultiFernet`); this replaces the key-id prefix idea. The stored secret is the encrypted
+  JSON of the auth fields; `auth_config_to_secret` / `auth_config_from_secret` map it.
+- **`ump-import-providers --owner-sub …`** — `ProvidersImportService` over a minimal
+  `ModelRegistryPort` (SQL + in-memory). Create-only, so re-running never undoes registry
+  changes. Each model is `published` with the raw description fetched and hashed
+  (`interface_sha256`, rules above). Two choices the spec left open:
+  `verified_by = 'ump:providers-import'` (a system account, so the four-eyes CHECK holds
+  and the record says honestly where the verification came from), and
+  `license = 'NOASSERTION'` / a placeholder `purpose` where providers.yaml has no source.
+
+Not yet: the rest of phase 1 (full domain models, `GET /models`), phases 3–6.
+
 ## Implementation phases
 
 0. **Prerequisite P1.** Reject unconfigured/excluded processes on execution. Ships
