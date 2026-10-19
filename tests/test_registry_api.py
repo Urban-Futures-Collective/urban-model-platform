@@ -106,7 +106,7 @@ def _model(server: ProviderServer, pid: str, status: str, owner="owner-1", **kw)
         remote_process_id=pid,
         owner_sub=owner,
         full_name={"de": f"Modell {pid}", "en": f"Model {pid}"},
-        purpose={"de": "Zweck"},
+        purpose={"en": "Purpose"},
         license="MIT",
         status=status,
         status_note="looks fine" if status != "draft" else None,
@@ -182,7 +182,7 @@ def _client(public: bool = False):
             fetch=NoFetch(),
             remote_auth=RemoteAuthAdapter(),
             cipher=None,
-            languages=["de", "en"],
+            languages=["en", "de"],
             public_catalogue=public,
             jobs=InMemoryJobRepository("scratch/test_registry_jobs"),
         ),
@@ -309,19 +309,19 @@ def test_language_resolution_and_headers():
     client, _, seeded = _client(public=True)
     pub = seeded["pub"].id
     with client:
-        en = _get(client, f"/models/{pub}", headers={"Accept-Language": "en;q=0.9, fr"})
-        assert en.headers["Content-Language"] == "en"
-        body = en.json()
-        assert body["lang"] == "en" and body["languages"] == ["de", "en"]
-        assert body["full_name"] == "Model pub"
-        assert body["purpose"] == "Zweck"  # no English text: default language
-        assert body["keywords"] == ["bike"]
+        de = _get(client, f"/models/{pub}", headers={"Accept-Language": "de;q=0.9, fr"})
+        assert de.headers["Content-Language"] == "de"
+        body = de.json()
+        assert body["lang"] == "de" and body["languages"] == ["de", "en"]
+        assert body["full_name"] == "Modell pub"
+        assert body["purpose"] == "Purpose"  # no German text: default language
+        assert body["keywords"] == ["Rad"]
         assert body["applications"] == [{"title": "Hamburg", "year": 2025}]
-        assert body["io_notes"] == {"x": "metres"}
+        assert body["io_notes"] == {"x": "Meter"}
         assert body["process_id"] == "srv:pub"
 
-        de = _get(client, f"/models/{pub}", params={"lang": "fr"}).json()
-        assert de["lang"] == "de" and de["full_name"] == "Modell pub"
+        en = _get(client, f"/models/{pub}", params={"lang": "fr"}).json()
+        assert en["lang"] == "en" and en["full_name"] == "Model pub"
 
         whole = _get(client, f"/models/{pub}", params={"lang": "*"})
         assert "Content-Language" not in whole.headers

@@ -94,9 +94,9 @@ class UmpSettings(BaseSettings):
     # Model registry API contract versions, mounted as /registry/v1/... — UMP's
     # own contract, versioned like the MCP catalog (major only), not like OGC.
     UMP_REGISTRY_API_VERSIONS: list[str] = ["1"]
-    # Languages model cards may use (D13); the first is the default for new
-    # models. Must match UMP-X's i18n.
-    UMP_REGISTRY_LANGUAGES: list[str] = ["de", "en"]
+    # Languages model cards may use (D13); the first (English) is the default
+    # for new models. Must match UMP-X's i18n.
+    UMP_REGISTRY_LANGUAGES: list[str] = ["en", "de"]
     # Outbound safety for user-supplied server URLs (REF-F12): https only unless
     # this is true (dev only); private/loopback addresses only for these hosts
     # (in-cluster model servers, e.g. "modelserver", "localhost" in dev).
