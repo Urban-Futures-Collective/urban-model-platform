@@ -101,7 +101,7 @@ class Descriptions(SafeFetchPort):
 
     async def get_json(self, url, headers=None):
         assert url == BASE + "processes/echo"
-        assert headers["Accept-Language"] == "de"  # hash = default-language answer
+        assert headers["Accept-Language"] == "en"  # hash = default-language answer
         return self.description
 
 
@@ -135,7 +135,7 @@ class Env:
                 fetch=self.fetch,
                 remote_auth=RemoteAuthAdapter(),
                 cipher=None,
-                languages=["de", "en"],
+                languages=["en", "de"],
                 public_catalogue=True,
                 jobs=self.jobs,
             ),
@@ -154,8 +154,8 @@ class Env:
                     provider_server_id=server.id,
                     remote_process_id="echo",
                     owner_sub="owner-1",
-                    full_name={"de": "Echo"},
-                    purpose={"de": "Test"},
+                    full_name={"en": "Echo"},
+                    purpose={"en": "Test"},
                     license="MIT",
                 )
             ],

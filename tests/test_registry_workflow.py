@@ -42,8 +42,8 @@ def _model(status: str, complete: bool = True) -> RegistryModel:
         provider_server_id=uuid4(),
         remote_process_id="p",
         owner_sub="owner",
-        full_name={"de": "M"},
-        purpose={"de": "Zweck"} if complete else {},
+        full_name={"en": "M"},
+        purpose={"en": "Purpose"} if complete else {},
         license="MIT" if complete else None,
         status=status,
     )
