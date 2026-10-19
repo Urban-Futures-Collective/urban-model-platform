@@ -195,25 +195,14 @@ class ProvidersConfig(BaseModel):
 _AUTH_CONFIG = TypeAdapter(AuthConfig)
 
 
-def auth_config_to_secret(auth: AuthConfig) -> tuple[str, dict[str, str] | None]:
-    """Split *auth* into its type and the secret fields to store encrypted.
-
-    Returns ``(auth_type, None)`` for ``NoAuth``.
-    """
-    if isinstance(auth, NoAuthConfig):
-        return auth.type, None
-    secret = {
-        key: value.get_secret_value() if isinstance(value, SecretStr) else value
-        for key, value in auth
-        if key != "type"
-    }
-    return auth.type, secret
-
-
 def auth_config_from_secret(
     auth_type: str, secret: dict[str, Any] | None
 ) -> AuthConfig:
-    """Inverse of ``auth_config_to_secret``."""
+    """Auth config from its type and the decrypted secret fields.
+
+    The stored secret is the JSON of the auth fields without ``type``, e.g.
+    ``{"user": "...", "password": "..."}`` for BasicAuth.
+    """
     return _AUTH_CONFIG.validate_python({**(secret or {}), "type": auth_type})
 
 

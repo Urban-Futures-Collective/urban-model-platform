@@ -5,13 +5,14 @@ import pytest
 from pydantic import SecretStr
 
 from ump.core.models.providers_config import (
+    ApiKeyAuthConfig,
     BasicAuthConfig,
+    BearerTokenAuthConfig,
     NoAuthConfig,
     ProcessConfig,
     ProviderConfig,
     ProvidersSnapshot,
     auth_config_from_secret,
-    auth_config_to_secret,
 )
 
 SNAPSHOT = ProvidersSnapshot(
@@ -73,22 +74,30 @@ def test_state_defaults_to_published():
 
 
 @pytest.mark.parametrize(
-    "auth",
+    "auth_type, secret, expected",
     [
-        BasicAuthConfig(type="BasicAuth", user="u", password=SecretStr("p")),
-        {"type": "ApiKey", "key_name": "X-Key", "key_value": "k"},
-        {"type": "BearerToken", "token": "t"},
+        (
+            "BasicAuth",
+            {"user": "u", "password": "p"},
+            BasicAuthConfig(type="BasicAuth", user="u", password=SecretStr("p")),
+        ),
+        (
+            "ApiKey",
+            {"key_name": "X-Key", "key_value": "k"},
+            ApiKeyAuthConfig(type="ApiKey", key_name="X-Key", key_value=SecretStr("k")),
+        ),
+        (
+            "BearerToken",
+            {"token": "t"},
+            BearerTokenAuthConfig(type="BearerToken", token=SecretStr("t")),
+        ),
+        ("NoAuth", None, NoAuthConfig()),
     ],
 )
-def test_credentials_round_trip(auth):
-    original = (
-        auth_config_from_secret(auth["type"], auth) if isinstance(auth, dict) else auth
-    )
-    auth_type, secret = auth_config_to_secret(original)
-    assert all(isinstance(v, str) for v in secret.values())
-    assert auth_config_from_secret(auth_type, secret) == original
+def test_auth_config_from_stored_secret(auth_type, secret, expected):
+    assert auth_config_from_secret(auth_type, secret) == expected
 
 
-def test_no_auth_has_no_secret():
-    assert auth_config_to_secret(NoAuthConfig()) == ("NoAuth", None)
-    assert isinstance(auth_config_from_secret("NoAuth", None), NoAuthConfig)
+def test_stored_secret_cannot_override_the_auth_type():
+    auth = auth_config_from_secret("BearerToken", {"type": "NoAuth", "token": "t"})
+    assert auth.type == "BearerToken"

@@ -29,8 +29,8 @@ from ump.adapters.retry_tenacity import TenacityRetryAdapter
 from ump.adapters.site_info_static_adapter import StaticSiteInfoAdapter
 from ump.adapters.web.fastapi import create_app
 from ump.adapters.web.registry_router import RegistryServices
-from ump.composition import build_credential_cipher, construct_database_url
 from ump.core.config import JobManagerConfig
+from ump.core.interfaces.credential_cipher import CredentialCipherPort
 from ump.core.interfaces.job_repository import JobRepositoryPort
 from ump.core.interfaces.model_registry import ModelRegistryPort
 from ump.core.interfaces.providers import ProvidersPort
@@ -66,6 +66,38 @@ set_logger(LoggingAdapter("ump", app_settings.UMP_LOG_LEVEL))
 # ---------------------------------------------------------------------------
 # Factories for core managers (one set per worker process)
 # ---------------------------------------------------------------------------
+def construct_database_url() -> str:
+    if app_settings.UMP_DATABASE_URL:
+        return app_settings.UMP_DATABASE_URL
+    
+    if not (app_settings.UMP_DATABASE_HOST and app_settings.UMP_DATABASE_NAME):
+
+        raise RuntimeError(
+            "UMP_DATABASE_HOST and UMP_DATABASE_NAME "
+            "must be set if UMP_DATABASE_URL is not provided."
+        )
+
+    user: str = app_settings.UMP_DATABASE_USER
+    password: str = app_settings.UMP_DATABASE_PASSWORD.get_secret_value() if app_settings.UMP_DATABASE_PASSWORD else ""
+    host: str = app_settings.UMP_DATABASE_HOST
+    port: int = app_settings.UMP_DATABASE_PORT
+    name: str = app_settings.UMP_DATABASE_NAME
+
+    return (
+        f"postgresql+asyncpg://{user}:{password}"
+        f"@{host}:{port}/{name}"
+    )
+
+def build_credential_cipher() -> CredentialCipherPort | None:
+    """Cipher for model-server credentials in the registry, if a key is set."""
+    key = app_settings.UMP_REGISTRY_CREDENTIALS_KEY
+    if key is None:
+        return None
+    from ump.adapters.credential_cipher_fernet import FernetCredentialCipher
+
+    return FernetCredentialCipher(key.get_secret_value().split(","))
+
+
 def _process_manager_factory(client):
     return ProcessManager(
         providers_port,

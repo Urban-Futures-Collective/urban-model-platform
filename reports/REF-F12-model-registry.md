@@ -65,7 +65,7 @@ own (audit log).
 | `model_test_case`, `model_reference`, `model_application` | `test_cases`, `literature`, `applications` JSONB | Not queryable as rows (a GIN index can be added if search is needed). |
 | `model_deployment` | columns on `model` + `process_config` JSONB | One model = one remote process (was already 1:1 in practice). |
 | `process_interface_snapshot` (history) | `verified_interface` + `current_interface_sha256` on `model` | No history of past interfaces; drift events with a diff summary are in the audit log for 3 months. |
-| `credentials_secret_ref` alternative | `credentials` (encrypted) only | Ops can no longer point at a Kubernetes secret; the import command encrypts existing credentials instead. |
+| `credentials_secret_ref` alternative | `credentials` (encrypted) only | Ops can no longer point at a Kubernetes secret; credentials are entered through onboarding (phase B) and encrypted there. |
 | monthly partitions + retention functions | plain table + daily `DELETE` | Nothing relevant at the expected volume. |
 | `deprecated` status, `hosting`, server operator | — | Can be a note on the model card. |
 
@@ -428,7 +428,7 @@ ops handled (in `providers.yaml` / Kubernetes secrets).
   `credentials_set: true|false`.
 - `ProviderConfigDbAdapter` decrypts when building `ProviderConfig.authentication`, which
   already holds `SecretStr`, so `RemoteAuthAdapter` needs no change.
-- The import command encrypts the credentials it reads from `providers.yaml`.
+- Onboarding (`POST`/`PATCH /servers`, phase B) encrypts the credentials it receives.
 
 ## Outbound request safety
 
@@ -549,10 +549,10 @@ registry writes in the same worker, and via Postgres `LISTEN/NOTIFY` for other w
 `CredentialCipherPort` and the session factory are injected in `asgi.py`; the adapter never
 constructs them.
 
-Selection: `UMP_PROVIDERS_SOURCE=file|db` (default `file`). Migration path: a one-off
-`ump-import-providers` command reads `providers.yaml` into the registry (one
-`provider_server` per provider, one `published` model per listed process, credentials
-encrypted, owner = a given `platform-admin` sub), then the setting is switched to `db`.
+Selection: `UMP_PROVIDERS_SOURCE=file|db` (default `file`). Migration path (decided
+2026-10-19): **no automatic import of `providers.yaml`.** Servers and models are entered
+through the registry API (phase B onboarding) and go through review; for local
+development `scripts/seed_registry_dev.sql` registers the bundled mock server.
 
 **Composition root (`asgi.py`):** construct the SQL (or in-memory) registry adapter, the
 audit adapter, the cipher, the providers adapter selected by `UMP_PROVIDERS_SOURCE`; inject
@@ -633,13 +633,10 @@ language, JSONB type checks, provider view, audit guard and retention delete). T
   `UMP_REGISTRY_CREDENTIALS_KEY` takes comma-separated keys (first encrypts, all decrypt —
   `MultiFernet`); this replaces the key-id prefix idea. The stored secret is the encrypted
   JSON of the auth fields; `auth_config_to_secret` / `auth_config_from_secret` map it.
-- **`ump-import-providers --owner-sub …`** — `ProvidersImportService` over a minimal
-  `ModelRegistryPort` (SQL + in-memory). Create-only, so re-running never undoes registry
-  changes. Each model is `published` with the raw description fetched and hashed
-  (`interface_sha256`, rules above). Two choices the spec left open:
-  `verified_by = 'ump:providers-import'` (a system account, so the four-eyes CHECK holds
-  and the record says honestly where the verification came from), and
-  `license = 'NOASSERTION'` / a placeholder `purpose` where providers.yaml has no source.
+- **No `providers.yaml` import** (dropped 2026-10-19; it existed briefly as
+  `ump-import-providers`). `scripts/seed_registry_dev.sql` seeds the mock server for local
+  work and for the Postgres tests of `ProviderConfigDbAdapter`. Servers with credentials
+  cannot be seeded in plain SQL — the ciphertext needs `UMP_REGISTRY_CREDENTIALS_KEY`.
 
 **Registry API phase A is implemented** (branch `v3.0.0alpha/registry-api`): `GET /registry/v1`
 `/me`, `/models`, `/models/{id}`, `/servers`, `/servers/{id}`, `/roles/vocabulary`.
@@ -669,7 +666,7 @@ Not yet: phases B–E of the registry API, drift checks, retention.
 0. **Prerequisite P1.** Reject unconfigured/excluded processes on execution. Ships
    independently.
 1. **Schema + read side.** Migration 0003, domain models, `ModelRegistryPort` (SQL +
-   in-memory), `GET /models`. Import command for `providers.yaml`.
+   in-memory), `GET /models`. (The `providers.yaml` import was dropped, see above.)
 2. **Providers from the database.** `ProviderConfigDbAdapter`, `UMP_PROVIDERS_SOURCE`.
    Existing OGC behaviour must be unchanged — the existing test suite is the acceptance test.
 3. **Onboarding + model cards.** Servers, discovery, pre-fill, credentials, outbound checks.
@@ -697,7 +694,7 @@ no ordering dependence):
 - drift service with an in-test `HttpClientPort`: in_sync → drifted → restored;
   unreachable; audit event only on state change;
 - `ProviderConfigDbAdapter` produces `ProviderConfig` equal to what the file adapter produces
-  for the same `providers.yaml` (round trip via the import command);
+  for the same configuration (seeded rows vs. the expected `ProviderConfig`);
 - outbound checks: private/loopback/metadata addresses rejected, allowlisted host accepted;
 - credentials: never present in any API response; decrypt(encrypt(x)) == x; wrong key fails;
 - authorization matrix for every registry endpoint, including `UMP_AUTH_ENABLED=false`;
@@ -752,7 +749,7 @@ stops new runs (D9), catalogue follows `UMP_PUBLIC_PROCESSES` (D10), 3-month ret
 | `src/ump/adapters/web/fastapi.py` | MODIFY — include the registry router |
 | `src/ump/asgi.py` | MODIFY — wiring, `UMP_PROVIDERS_SOURCE`, drift task in lifespan |
 | `src/ump/core/settings.py`, `.env.example` | MODIFY — `UMP_PROVIDERS_SOURCE`, `UMP_REGISTRY_CREDENTIALS_KEY`, `UMP_INTERFACE_CHECK_INTERVAL_SECONDS`, `UMP_REGISTRY_ALLOW_HTTP`, `UMP_REGISTRY_ALLOWED_PRIVATE_HOSTS`, `UMP_REGISTRY_LANGUAGES` |
-| `src/ump/cli.py`, `pyproject.toml` | MODIFY — `ump-import-providers`, `ump-retention` commands |
+| `src/ump/cli.py`, `pyproject.toml` | MODIFY — `ump-retention` command |
 | `charts/urban-model-platform/templates/cronjob-retention.yaml` | CREATE — daily `ump-retention` |
 | `tests/test_registry_*.py` | CREATE |
 | `docs/diagrams/model-registry-uml.mmd` (+ `.svg`, `.png`) | EXISTS — keep in sync |
