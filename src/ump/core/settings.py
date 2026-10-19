@@ -94,6 +94,16 @@ class UmpSettings(BaseSettings):
     # Model registry API contract versions, mounted as /registry/v1/... — UMP's
     # own contract, versioned like the MCP catalog (major only), not like OGC.
     UMP_REGISTRY_API_VERSIONS: list[str] = ["1"]
+    # Languages model cards may use (D13); the first is the default for new
+    # models. Must match UMP-X's i18n.
+    UMP_REGISTRY_LANGUAGES: list[str] = ["de", "en"]
+    # Outbound safety for user-supplied server URLs (REF-F12): https only unless
+    # this is true (dev only); private/loopback addresses only for these hosts
+    # (in-cluster model servers, e.g. "modelserver", "localhost" in dev).
+    UMP_REGISTRY_ALLOW_HTTP: bool = False
+    UMP_REGISTRY_ALLOWED_PRIVATE_HOSTS: list[str] = []
+    UMP_REGISTRY_FETCH_TIMEOUT: float = 10.0
+    UMP_REGISTRY_FETCH_MAX_BYTES: int = 2_000_000
     # When enabled, replace external links in fetched processes with local API links
     UMP_REWRITE_REMOTE_LINKS: bool = True
     # When true, JobManager verifies remote results immediately for terminal success responses

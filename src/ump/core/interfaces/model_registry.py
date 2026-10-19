@@ -1,7 +1,13 @@
 """ModelRegistryPort — repository for the model registry (REF-F12).
 
-Writes that change registry state will take an ``AuditEvent`` and record it in
-the same transaction (decision 2026-10-19); the read methods below need none.
+Every write that changes registry state takes the ``AuditEvent`` describing
+it and stores both in one transaction (decision 2026-10-19): either the change
+and its audit row are committed, or neither is. Services decide what goes into
+the event; repositories only persist it.
+
+Updates are conditional on ``expected_updated_at`` (optimistic concurrency):
+if the row changed since it was read, ``StaleWriteError`` is raised and nothing
+is written.
 """
 
 from __future__ import annotations
@@ -11,6 +17,15 @@ from dataclasses import dataclass
 from uuid import UUID
 
 from ump.core.models.registry import AppUser, ProviderServer, RegistryModel
+from ump.core.models.registry.audit import AuditEvent
+
+
+class RegistryConflictError(Exception):
+    """A unique rule would be broken (server name, model slug, server+process)."""
+
+
+class StaleWriteError(Exception):
+    """The row was changed by someone else since it was read."""
 
 
 @dataclass(frozen=True)
@@ -82,8 +97,16 @@ class ModelRegistryPort(ABC):
         """All servers ordered by name, or only those of *owner_sub*."""
 
     @abstractmethod
-    async def create_provider_server(self, server: ProviderServer) -> ProviderServer:
-        pass
+    async def create_provider_server(
+        self, server: ProviderServer, *, audit: AuditEvent
+    ) -> ProviderServer:
+        """Insert *server*; ``RegistryConflictError`` if the name is taken."""
+
+    @abstractmethod
+    async def update_provider_server(
+        self, server: ProviderServer, *, expected_updated_at, audit: AuditEvent
+    ) -> ProviderServer:
+        """Store every field of *server* except ``name`` (immutable)."""
 
     # --- models -----------------------------------------------------------
 
@@ -106,5 +129,17 @@ class ModelRegistryPort(ABC):
         """(server name, remote process id) of every model ever published."""
 
     @abstractmethod
-    async def create_model(self, model: RegistryModel) -> RegistryModel:
+    async def get_model_by_slug(self, slug: str) -> RegistryModel | None:
         pass
+
+    @abstractmethod
+    async def create_models(
+        self, models: list[RegistryModel], *, audit: list[AuditEvent]
+    ) -> list[RegistryModel]:
+        """Insert all *models* or none; ``RegistryConflictError`` on a duplicate."""
+
+    @abstractmethod
+    async def update_model(
+        self, model: RegistryModel, *, expected_updated_at, audit: AuditEvent
+    ) -> RegistryModel:
+        """Store every field of *model* except identity (id, server, process)."""
