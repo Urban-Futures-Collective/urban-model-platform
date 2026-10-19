@@ -29,11 +29,12 @@ from ump.core.interfaces.auth import AuthContext
 from ump.core.interfaces.providers import ProvidersPort
 from ump.core.models.ogcp_exception import OGCExceptionResponse
 from ump.core.models.providers_config import ProcessConfig, canonical_process_id
+from ump.core.models.registry import roles
 
 _log = logging.getLogger(__name__)
 
 # Platform role of the people who review models (REF-F11/F12).
-VERIFIER_ROLE = "verifier"
+VERIFIER_ROLE = roles.VERIFIER
 
 
 class AuthorizationService:
@@ -133,6 +134,33 @@ class AuthorizationService:
                 instance=None,
             )
         )
+
+    def require_platform_role(self, auth: AuthContext, *allowed: str) -> None:
+        """Raise 401 if *auth* is anonymous, 403 if it holds none of *allowed*.
+
+        Platform roles (REF-F11) gate the registry API; model-access roles are
+        never accepted here.
+        """
+        if not auth.is_authenticated:
+            raise OGCProcessException(
+                OGCExceptionResponse(
+                    type="about:blank",
+                    title="Unauthorized",
+                    status=401,
+                    detail="Authentication required.",
+                    instance=None,
+                )
+            )
+        if not set(allowed) & set(auth.roles):
+            raise OGCProcessException(
+                OGCExceptionResponse(
+                    type="about:blank",
+                    title="Forbidden",
+                    status=403,
+                    detail="Requires one of the roles: " + ", ".join(sorted(allowed)),
+                    instance=None,
+                )
+            )
 
     # ------------------------------------------------------------------
     # Helpers

@@ -116,7 +116,13 @@ class JwtAuthAdapter(AuthPort):
 
         user_id: Optional[str] = claims.get("sub")
         roles = self._extract_roles(claims)
-        return AuthContext(user_id=user_id, roles=roles, is_authenticated=True)
+        return AuthContext(
+            user_id=user_id,
+            roles=roles,
+            is_authenticated=True,
+            email=claims.get("email"),
+            name=claims.get("name") or claims.get("preferred_username"),
+        )
 
     # ------------------------------------------------------------------
     # JWKS helpers

@@ -1,0 +1,1086 @@
+{
+  "paths": {
+    "/v1.0/jobs": {
+      "get": {
+        "operationId": "list_jobs_v1_0_jobs_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobList"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Jobs"
+      }
+    },
+    "/v1.0/jobs/{job_id}": {
+      "get": {
+        "operationId": "get_job_v1_0_jobs__job_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobStatusInfo"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Job"
+      }
+    },
+    "/v1.0/jobs/{job_id}/results": {
+      "get": {
+        "operationId": "get_job_results_v1_0_jobs__job_id__results_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Job Results"
+      }
+    },
+    "/v1.0/processes": {
+      "get": {
+        "operationId": "get_all_processes_v1_0_processes_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProcessList"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get All Processes"
+      }
+    },
+    "/v1.0/processes/{process_id}": {
+      "get": {
+        "operationId": "get_process_v1_0_processes__process_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "process_id",
+            "required": true,
+            "schema": {
+              "title": "Process Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Process"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Process"
+      }
+    },
+    "/v1.0/processes/{process_id}/execution": {
+      "post": {
+        "operationId": "execute_process_v1_0_processes__process_id__execution_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "process_id",
+            "required": true,
+            "schema": {
+              "title": "Process Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Execute Process"
+      }
+    }
+  },
+  "schemas": {
+    "AdditionalParameter": {
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "value": {
+          "items": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "additionalProperties": true,
+                "type": "object"
+              }
+            ]
+          },
+          "title": "Value",
+          "type": "array"
+        }
+      },
+      "required": [
+        "name",
+        "value"
+      ],
+      "title": "AdditionalParameter",
+      "type": "object"
+    },
+    "HTTPValidationError": {
+      "properties": {
+        "detail": {
+          "items": {
+            "$ref": "#/components/schemas/ValidationError"
+          },
+          "title": "Detail",
+          "type": "array"
+        }
+      },
+      "title": "HTTPValidationError",
+      "type": "object"
+    },
+    "JobList": {
+      "properties": {
+        "jobs": {
+          "items": {
+            "$ref": "#/components/schemas/JobStatusInfo"
+          },
+          "title": "Jobs",
+          "type": "array"
+        },
+        "links": {
+          "items": {
+            "$ref": "#/components/schemas/Link"
+          },
+          "title": "Links",
+          "type": "array"
+        }
+      },
+      "required": [
+        "jobs",
+        "links"
+      ],
+      "title": "JobList",
+      "type": "object"
+    },
+    "JobStatusInfo": {
+      "properties": {
+        "created": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Created"
+        },
+        "finished": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Finished"
+        },
+        "jobID": {
+          "title": "Jobid",
+          "type": "string"
+        },
+        "links": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/components/schemas/Link"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Links"
+        },
+        "message": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Message"
+        },
+        "processID": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Processid"
+        },
+        "progress": {
+          "anyOf": [
+            {
+              "maximum": 100.0,
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Progress"
+        },
+        "started": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Started"
+        },
+        "status": {
+          "$ref": "#/components/schemas/StatusCode"
+        },
+        "type": {
+          "const": "process",
+          "default": "process",
+          "title": "Type",
+          "type": "string"
+        },
+        "updated": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Updated"
+        }
+      },
+      "required": [
+        "jobID",
+        "status"
+      ],
+      "title": "JobStatusInfo",
+      "type": "object"
+    },
+    "Link": {
+      "properties": {
+        "href": {
+          "title": "Href",
+          "type": "string"
+        },
+        "rel": {
+          "title": "Rel",
+          "type": "string"
+        },
+        "title": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Title"
+        },
+        "type": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Type"
+        }
+      },
+      "required": [
+        "href",
+        "rel"
+      ],
+      "title": "Link",
+      "type": "object"
+    },
+    "Metadata": {
+      "properties": {
+        "href": {
+          "title": "Href",
+          "type": "string"
+        },
+        "role": {
+          "title": "Role",
+          "type": "string"
+        },
+        "title": {
+          "title": "Title",
+          "type": "string"
+        }
+      },
+      "required": [
+        "title",
+        "role",
+        "href"
+      ],
+      "title": "Metadata",
+      "type": "object"
+    },
+    "Process": {
+      "properties": {
+        "additionalParameters": {
+          "anyOf": [
+            {
+              "$ref": "#/components/schemas/AdditionalParameter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Description"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "inputs": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "$ref": "#/components/schemas/ProcessInput"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Inputs"
+        },
+        "jobControlOptions": {
+          "items": {
+            "$ref": "#/components/schemas/ProcessJobControlOptions"
+          },
+          "title": "Jobcontroloptions",
+          "type": "array"
+        },
+        "keywords": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Keywords"
+        },
+        "links": {
+          "items": {
+            "$ref": "#/components/schemas/Link"
+          },
+          "title": "Links",
+          "type": "array"
+        },
+        "metadata": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/components/schemas/Metadata"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Metadata"
+        },
+        "outputTransmission": {
+          "items": {
+            "$ref": "#/components/schemas/ProcessOutputTransmission"
+          },
+          "title": "Outputtransmission",
+          "type": "array"
+        },
+        "outputs": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "$ref": "#/components/schemas/ProcessOutput"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Outputs"
+        },
+        "title": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Title"
+        },
+        "version": {
+          "title": "Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "version",
+        "jobControlOptions",
+        "outputTransmission",
+        "links"
+      ],
+      "title": "Process",
+      "type": "object"
+    },
+    "ProcessInput": {
+      "properties": {
+        "description": {
+          "title": "Description",
+          "type": "string"
+        },
+        "maxOccurs": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": 1,
+          "title": "Maxoccurs"
+        },
+        "metadata": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Metadata"
+        },
+        "minOccurs": {
+          "default": 1,
+          "title": "Minoccurs",
+          "type": "integer"
+        },
+        "schema": {
+          "$ref": "#/components/schemas/Schema"
+        },
+        "title": {
+          "title": "Title",
+          "type": "string"
+        }
+      },
+      "required": [
+        "title",
+        "description",
+        "schema"
+      ],
+      "title": "ProcessInput",
+      "type": "object"
+    },
+    "ProcessJobControlOptions": {
+      "enum": [
+        "sync-execute",
+        "async-execute",
+        "dismiss"
+      ],
+      "title": "ProcessJobControlOptions",
+      "type": "string"
+    },
+    "ProcessList": {
+      "properties": {
+        "links": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/components/schemas/Link"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Links"
+        },
+        "processes": {
+          "items": {
+            "$ref": "#/components/schemas/ProcessSummary"
+          },
+          "title": "Processes",
+          "type": "array"
+        }
+      },
+      "required": [
+        "processes"
+      ],
+      "title": "ProcessList",
+      "type": "object"
+    },
+    "ProcessOutput": {
+      "properties": {
+        "description": {
+          "title": "Description",
+          "type": "string"
+        },
+        "keywords": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Keywords",
+          "type": "array"
+        },
+        "metadata": {
+          "default": [],
+          "items": {
+            "$ref": "#/components/schemas/Metadata"
+          },
+          "title": "Metadata",
+          "type": "array"
+        },
+        "schema": {
+          "$ref": "#/components/schemas/Schema"
+        },
+        "title": {
+          "title": "Title",
+          "type": "string"
+        }
+      },
+      "required": [
+        "title",
+        "description",
+        "schema"
+      ],
+      "title": "ProcessOutput",
+      "type": "object"
+    },
+    "ProcessOutputTransmission": {
+      "enum": [
+        "value",
+        "reference"
+      ],
+      "title": "ProcessOutputTransmission",
+      "type": "string"
+    },
+    "ProcessSummary": {
+      "properties": {
+        "additionalParameters": {
+          "anyOf": [
+            {
+              "$ref": "#/components/schemas/AdditionalParameter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Description"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "jobControlOptions": {
+          "items": {
+            "$ref": "#/components/schemas/ProcessJobControlOptions"
+          },
+          "title": "Jobcontroloptions",
+          "type": "array"
+        },
+        "keywords": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Keywords"
+        },
+        "links": {
+          "items": {
+            "$ref": "#/components/schemas/Link"
+          },
+          "title": "Links",
+          "type": "array"
+        },
+        "metadata": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/components/schemas/Metadata"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Metadata"
+        },
+        "outputTransmission": {
+          "items": {
+            "$ref": "#/components/schemas/ProcessOutputTransmission"
+          },
+          "title": "Outputtransmission",
+          "type": "array"
+        },
+        "title": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Title"
+        },
+        "version": {
+          "title": "Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "version",
+        "jobControlOptions",
+        "outputTransmission",
+        "links"
+      ],
+      "title": "ProcessSummary",
+      "type": "object"
+    },
+    "Schema": {
+      "properties": {
+        "allOf": {
+          "anyOf": [
+            {
+              "items": {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Allof"
+        },
+        "contentEncoding": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Contentencoding"
+        },
+        "contentMediaType": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Contentmediatype"
+        },
+        "contentSchema": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Contentschema"
+        },
+        "default": {
+          "anyOf": [
+            {},
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Default"
+        },
+        "enum": {
+          "anyOf": [
+            {
+              "items": {},
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Enum"
+        },
+        "format": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Format"
+        },
+        "items": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "items": {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Items"
+        },
+        "maxLength": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Maxlength"
+        },
+        "maximum": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Maximum"
+        },
+        "minLength": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Minlength"
+        },
+        "minimum": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Minimum"
+        },
+        "oneOf": {
+          "anyOf": [
+            {
+              "items": {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Oneof"
+        },
+        "pattern": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Pattern"
+        },
+        "properties": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "$ref": "#/components/schemas/Schema"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Properties"
+        },
+        "required": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Required"
+        },
+        "type": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Type"
+        }
+      },
+      "title": "Schema",
+      "type": "object"
+    },
+    "StatusCode": {
+      "enum": [
+        "accepted",
+        "failed",
+        "running",
+        "successful",
+        "dismissed"
+      ],
+      "title": "StatusCode",
+      "type": "string"
+    },
+    "ValidationError": {
+      "properties": {
+        "ctx": {
+          "title": "Context",
+          "type": "object"
+        },
+        "input": {
+          "title": "Input"
+        },
+        "loc": {
+          "items": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              }
+            ]
+          },
+          "title": "Location",
+          "type": "array"
+        },
+        "msg": {
+          "title": "Message",
+          "type": "string"
+        },
+        "type": {
+          "title": "Error Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "loc",
+        "msg",
+        "type"
+      ],
+      "title": "ValidationError",
+      "type": "object"
+    }
+  }
+}

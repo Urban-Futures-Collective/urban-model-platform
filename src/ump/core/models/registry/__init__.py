@@ -6,6 +6,7 @@ from ump.core.models.registry.entities import (
     AppUser,
     ProviderServer,
     RegistryModel,
+    exec_state_for,
     slugify,
 )
 from ump.core.models.registry.interface_hash import interface_sha256
@@ -16,6 +17,7 @@ __all__ = [
     "AppUser",
     "ProviderServer",
     "RegistryModel",
+    "exec_state_for",
     "interface_sha256",
     "slugify",
 ]

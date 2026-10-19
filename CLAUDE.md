@@ -118,6 +118,10 @@ Jobs carry a local UUID; remote self/results links are rewritten to local ones
   Model-server credentials are stored Fernet-encrypted (`UMP_REGISTRY_CREDENTIALS_KEY`);
   `ump-import-providers --owner-sub <sub>` copies a providers.yaml into the registry.
   Both adapters share the lookup rules in `core/models/providers_config.py::ProvidersSnapshot`.
+- The model registry has its own REST API at `/registry/v1/…` (`adapters/web/registry_router.py`,
+  core services `core/services/registry_*.py`), mounted outside the OGC version loop. **The OGC
+  `/v1.0/*` contract must not change**: `tests/test_ogc_contract_unchanged.py` pins it to
+  `tests/fixtures/ogc_openapi_v1.0.json`. Registry changes reach OGC only via the providers snapshot.
 - Inbound auth is JWT/JWKS (`JwtAuthAdapter`), off by default (`UMP_AUTH_ENABLED=false`).
   Authorization is role-based and lives in `core/services/authorization.py`: role `{provider}` grants the
   whole provider, `{provider}:{process}` a single process, and `anonymous-access: true` bypasses auth.

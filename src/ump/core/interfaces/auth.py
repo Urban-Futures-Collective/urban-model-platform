@@ -24,6 +24,10 @@ class AuthContext:
     user_id: Optional[str]       # None for anonymous / unauthenticated requests
     roles: List[str]             # flat list merged from all configured claim paths
     is_authenticated: bool       # False when token absent or auth disabled
+    # Token claims cached in registry.app_user (REF-F12 "Identity"); optional so
+    # every existing caller keeps working.
+    email: Optional[str] = None
+    name: Optional[str] = None
 
 
 class AuthPort(ABC):
