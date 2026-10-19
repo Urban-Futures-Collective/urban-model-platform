@@ -60,7 +60,7 @@ class RegistryModel(BaseModel):
     provider_server_id: UUID
     remote_process_id: str
     owner_sub: str
-    default_lang: str = "de"
+    default_lang: str = "en"
     full_name: dict[str, str]
     short_description: dict[str, str] = Field(default_factory=dict)
     purpose: dict[str, str] = Field(default_factory=dict)
