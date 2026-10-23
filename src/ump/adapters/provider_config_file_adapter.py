@@ -14,6 +14,7 @@ from ump.core.models.providers_config import (
     ProcessConfig,
     ProviderConfig,
     ProvidersConfig,
+    ProvidersSnapshot,
 )
 
 logger = logging.getLogger(__name__)
@@ -52,9 +53,9 @@ class _ConfigFileHandler(FileSystemEventHandler):
 class ProviderConfigFileAdapter(ProvidersPort):
     def __init__(self, config_path: str):
         self._config_path = config_path
-        # RLock prevents self-deadlock when methods call each other while locked.
+        # Guards the snapshot swap; readers take the reference under the lock.
         self._lock = threading.RLock()
-        self._providers: ProvidersConfig = ProvidersConfig(providers=[])
+        self._snapshot = ProvidersSnapshot()
 
         self.load_providers()
 
@@ -76,23 +77,16 @@ class ProviderConfigFileAdapter(ProvidersPort):
             self._observer.join()
 
     def _atomic_update(self, new_providers: ProvidersConfig):
-        """
-        Atomar und thread-safe die Provider-Konfiguration aktualisieren, bei Fehlern Rollback.
-        """
+        """Swap in a new snapshot; on error the previous one stays active."""
+        snapshot = ProvidersSnapshot(
+            [provider.model_copy(deep=True) for provider in new_providers.providers]
+        )
         with self._lock:
-            old_providers = self._providers
-            try:
-                # Deep copy the new provider configuration
-                self._providers = ProvidersConfig(
-                    providers=[
-                        provider.model_copy(deep=True)
-                        for provider in new_providers.providers
-                    ]
-                )
-            except Exception as update_error:
-                logger.error("Error updating providers: %s", update_error)
-                self._providers = old_providers
-                raise update_error
+            self._snapshot = snapshot
+
+    def _current(self) -> ProvidersSnapshot:
+        with self._lock:
+            return self._snapshot
 
     def load_providers(self):
         logger.info(f"(Re)Loading providers from {self._config_path}")
@@ -128,75 +122,21 @@ class ProviderConfigFileAdapter(ProvidersPort):
             logger.error("Unexpected error loading providers: %s", unexpected_error)
 
     def get_providers(self) -> List[ProviderConfig]:
-        with self._lock:
-            return list(self._providers.providers)
+        return self._current().providers
 
     def get_provider(self, provider_name: str) -> Optional[ProviderConfig]:
-        with self._lock:
-            for provider in self._providers.providers:
-                if provider.name == provider_name:
-                    return provider
-            return None
+        return self._current().get_provider(provider_name)
 
     def get_process_config(
         self, provider_name: str, process_id: str
     ) -> Optional[ProcessConfig]:
-        with self._lock:
-            provider = None
-            for candidate in self._providers.providers:
-                if candidate.name == provider_name:
-                    provider = candidate
-                    break
-
-            if provider:
-                for process in provider.processes:
-                    configured_id = process.id
-                    canonical_id = (
-                        configured_id
-                        if configured_id.startswith(f"{provider_name}:")
-                        else f"{provider_name}:{configured_id}"
-                    )
-                    if process_id == canonical_id:
-                        return process
-            return None
+        return self._current().get_process_config(provider_name, process_id)
 
     def list_providers(self) -> List[str]:
-        with self._lock:
-            return [provider.name for provider in self._providers.providers]
+        return self._current().provider_names()
 
     def get_processes(self, provider_name: str) -> List[str]:
-        with self._lock:
-            provider = None
-            for candidate in self._providers.providers:
-                if candidate.name == provider_name:
-                    provider = candidate
-                    break
-            if provider:
-                return [
-                    process.id
-                    if process.id.startswith(f"{provider_name}:")
-                    else f"{provider_name}:{process.id}"
-                    for process in provider.processes
-                ]
-            return []
+        return self._current().get_processes(provider_name)
 
     def check_process_availability(self, provider_name: str, process_id: str) -> bool:
-        with self._lock:
-            provider = None
-            for candidate in self._providers.providers:
-                if candidate.name == provider_name:
-                    provider = candidate
-                    break
-            if not provider:
-                return False
-
-            for process in provider.processes:
-                configured_id = process.id
-                canonical_id = (
-                    configured_id
-                    if configured_id.startswith(f"{provider_name}:")
-                    else f"{provider_name}:{configured_id}"
-                )
-                if process_id == canonical_id:
-                    return not process.exclude
-            return False
+        return self._current().check_process_availability(provider_name, process_id)

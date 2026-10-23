@@ -20,8 +20,8 @@
 --     requirements, I/O notes, execution config) are JSONB documents,
 --     validated by Pydantic models in the core.
 --   * Free-text model-card fields are multilingual (D13): JSONB language maps
---     {"de": "…", "en": "…"} with a per-model default language that must
---     always be present. Allowed language codes are a platform setting
+--     {"en": "…", "de": "…"} with a per-model default language that must
+--     always be present (platform default: English). Allowed language codes are a platform setting
 --     (UMP_REGISTRY_LANGUAGES), checked in the core.
 --   * Workflow rules (allowed status transitions, who may perform them) live in
 --     the core. The database only keeps invariants that are cheap to state as
@@ -100,7 +100,7 @@ CREATE TABLE registry.model (
 
     -- model card ---------------------------------------------------------------
     -- L = language map {"<lang>": "<text>"} (D13); the default language is mandatory.
-    default_lang        text        NOT NULL DEFAULT 'de'
+    default_lang        text        NOT NULL DEFAULT 'en'
                         CHECK (default_lang ~ '^[a-z]{2,3}(-[A-Z]{2})?$'),   -- BCP 47 subset
     full_name           jsonb       NOT NULL,                  -- L
     short_description   jsonb       NOT NULL DEFAULT '{}'::jsonb,  -- L
@@ -250,3 +250,23 @@ SELECT ps.id                   AS provider_server_id,
  WHERE ps.is_active
    AND m.exec_state IS NOT NULL
  GROUP BY ps.id;
+
+
+-- -----------------------------------------------------------------------------
+-- Change notification for ProviderConfigDbAdapter. Every worker LISTENs on
+-- `ump_providers_changed` and rebuilds its in-memory provider snapshot, so a
+-- deactivation (D9) reaches all workers at once. Statement-level triggers:
+-- one notification per statement; Postgres folds duplicates per transaction.
+-- -----------------------------------------------------------------------------
+CREATE FUNCTION registry.notify_providers_changed() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+    PERFORM pg_notify('ump_providers_changed', TG_TABLE_NAME);
+    RETURN NULL;
+END $$;
+CREATE TRIGGER trg_provider_server_notify
+    AFTER INSERT OR UPDATE OR DELETE OR TRUNCATE ON registry.provider_server
+    FOR EACH STATEMENT EXECUTE FUNCTION registry.notify_providers_changed();
+CREATE TRIGGER trg_model_notify
+    AFTER INSERT OR UPDATE OR DELETE OR TRUNCATE ON registry.model
+    FOR EACH STATEMENT EXECUTE FUNCTION registry.notify_providers_changed();

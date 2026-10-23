@@ -81,12 +81,16 @@ class TestProvidersAdapter(ProvidersPort):
 
     def get_process_config(self, provider_name: str, process_id: str):
         # Return a minimal test process config with ttw_job_done inherited from provider
+        # Every process of the test provider counts as configured (P1)
         class TestProcessConfig:
-            def __init__(self, ttw_job_done=None):
+            def __init__(self, process_id: str, ttw_job_done=None):
+                self.id = process_id.split(":", 1)[-1]  # verbatim remote id
+                self.exclude = False
+                self.state = "published"
                 self.ttw_job_done = ttw_job_done  # None means use provider default
                 self.poll_interval = None
 
-        return TestProcessConfig(ttw_job_done=None)  # pragma: no cover
+        return TestProcessConfig(process_id, ttw_job_done=None)
 
     def list_providers(self):
         return [self._provider.name]
@@ -122,6 +126,7 @@ class TestHttpClientAdapter(HttpClientPort):
         self._post_response = post_response
         self._get_responses = get_responses or []
         self.get_calls = []
+        self.get_content_headers = []
 
     # Marker indicating this is not a production adapter (test helper)
     test = False
@@ -150,6 +155,7 @@ class TestHttpClientAdapter(HttpClientPort):
 
     async def get_content(self, url: str, timeout=None, headers=None):
         # Shares the get_calls index with get() so get_responses applies to both
+        self.get_content_headers.append(headers)
         idx = len(self.get_calls)
         self.get_calls.append(url)
         if idx < len(self._get_responses):
@@ -400,3 +406,26 @@ async def test_results_endpoint_proxy_success_and_not_available():
     assert results_resp_fail["status"] == 404
     # cleanup poll tasks
     await mgr_r.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_results_fetch_asks_for_json():
+    """Unit: JobManager.get_results proxy
+    Purpose: Results are fetched with an Accept header preferring JSON. Without
+    one, pygeoapi providers render JSON results as an HTML page.
+    Assertions: the results request carries Accept with application/json first.
+    """
+    post_response = {
+        "status": 200,
+        "headers": {},
+        "body": {"jobID": "remote-A", "status": "successful", "type": "process"},
+    }
+    mgr, _, http = make_manager(post_response, get_responses=[{"ok": True}, {"ok": True}])
+    resp = await mgr.run_execution_pipeline("prov:procH", {"inputs": {}}, {})
+    job_id = resp["headers"]["Location"].split("/")[-1]
+    http.get_content_headers.clear()
+    results_resp = await mgr.get_results(job_id)
+    assert results_resp["status"] == 200
+    assert len(http.get_content_headers) == 1
+    accept = (http.get_content_headers[0] or {}).get("Accept", "")
+    assert accept.split(",")[0].strip() == "application/json"

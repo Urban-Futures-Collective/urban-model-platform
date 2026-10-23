@@ -1,6 +1,17 @@
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import BaseModel, Field, HttpUrl, SecretStr, field_validator
+from pydantic import (
+    BaseModel,
+    Field,
+    HttpUrl,
+    SecretStr,
+    TypeAdapter,
+    field_validator,
+)
+
+# Execution state of a process (REF-F12 D7, D9). Processes from providers.yaml
+# are always "published"; the registry derives it from the model status.
+ProcessState = Literal["published", "in_review", "deactivated"]
 
 
 class GraphProperties(BaseModel):
@@ -99,6 +110,14 @@ class ProcessConfig(BaseModel):
             "cached based on inputs"
         ),
     )
+    state: ProcessState = Field(
+        default="published",
+        description=(
+            "Execution state. 'published': normal access rules; 'in_review': "
+            "only verifiers may run it; 'deactivated': nobody may start a run, "
+            "but running jobs can still be polled and their results fetched."
+        ),
+    )
 
 
 class BasicAuthConfig(BaseModel):
@@ -167,3 +186,86 @@ class ProvidersConfig(BaseModel):
     providers: list[ProviderConfig] = Field(
         description="List of provider configurations"
     )
+
+
+# ---------------------------------------------------------------------------
+# Outbound credentials <-> stored secret
+# ---------------------------------------------------------------------------
+
+_AUTH_CONFIG = TypeAdapter(AuthConfig)
+
+
+def auth_config_from_secret(
+    auth_type: str, secret: dict[str, Any] | None
+) -> AuthConfig:
+    """Auth config from its type and the decrypted secret fields.
+
+    The stored secret is the JSON of the auth fields without ``type``, e.g.
+    ``{"user": "...", "password": "..."}`` for BasicAuth.
+    """
+    return _AUTH_CONFIG.validate_python({**(secret or {}), "type": auth_type})
+
+
+# ---------------------------------------------------------------------------
+# Lookup rules shared by every ProvidersPort implementation
+# ---------------------------------------------------------------------------
+
+
+def canonical_process_id(provider_name: str, configured_id: str) -> str:
+    """UMP-local process id for a configured (remote) id.
+
+    A configured id that already carries the provider prefix (the remote is
+    another UMP instance) is used as-is to avoid double-prefixing.
+    """
+    if configured_id.startswith(f"{provider_name}:"):
+        return configured_id
+    return f"{provider_name}:{configured_id}"
+
+
+class ProvidersSnapshot:
+    """Immutable, indexed view of a provider configuration.
+
+    ``ProvidersPort`` adapters build a new snapshot on every (re)load and swap
+    it in whole, so readers never see a half-updated configuration.
+    """
+
+    def __init__(self, providers: list[ProviderConfig] | None = None) -> None:
+        self._providers = tuple(providers or ())
+        self._by_name = {p.name: p for p in self._providers}
+
+    @property
+    def providers(self) -> list[ProviderConfig]:
+        return list(self._providers)
+
+    def provider_names(self) -> list[str]:
+        return [p.name for p in self._providers]
+
+    def get_provider(self, provider_name: str) -> ProviderConfig | None:
+        return self._by_name.get(provider_name)
+
+    def get_process_config(
+        self, provider_name: str, process_id: str
+    ) -> ProcessConfig | None:
+        """Configured process for a canonical id, in any state."""
+        provider = self._by_name.get(provider_name)
+        if provider is None:
+            return None
+        for process in provider.processes:
+            if canonical_process_id(provider_name, process.id) == process_id:
+                return process
+        return None
+
+    def get_processes(self, provider_name: str) -> list[str]:
+        provider = self._by_name.get(provider_name)
+        if provider is None:
+            return []
+        return [canonical_process_id(provider_name, p.id) for p in provider.processes]
+
+    def check_process_availability(self, provider_name: str, process_id: str) -> bool:
+        """True if the process is configured, not excluded and not deactivated."""
+        process = self.get_process_config(provider_name, process_id)
+        return (
+            process is not None
+            and not process.exclude
+            and process.state != "deactivated"
+        )

@@ -20,7 +20,12 @@ from typing import Optional, Sequence
 
 from sqlalchemy import Column, DateTime, update as sa_update
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
 from sqlmodel import Field, SQLModel, col, select
 
 from ump.core.exceptions import OptimisticLockError
@@ -159,8 +164,16 @@ class SQLModelJobRepository(JobRepositoryPort):
     never issues DDL.
     """
 
-    def __init__(self, database_url: str) -> None:
-        self._engine = create_async_engine(database_url, echo=False)
+    def __init__(
+        self, database_url: str | None = None, *, engine: AsyncEngine | None = None
+    ) -> None:
+        # Prefer an injected engine so the composition root can share one
+        # connection pool between the job repository and the registry adapters.
+        if engine is None:
+            if database_url is None:
+                raise ValueError("SQLModelJobRepository needs database_url or engine")
+            engine = create_async_engine(database_url, echo=False)
+        self._engine = engine
         self._session_factory: async_sessionmaker[AsyncSession] = async_sessionmaker(
             self._engine, expire_on_commit=False
         )

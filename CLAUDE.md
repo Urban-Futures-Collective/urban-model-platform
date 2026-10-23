@@ -112,6 +112,13 @@ Jobs carry a local UUID; remote self/results links are rewritten to local ones
   (NoAuth/BasicAuth/ApiKey/BearerToken), and the explicit allowlist of exposed processes with
   per-process `anonymous-access`, `ttw-job-done`, `poll-interval`, `result-storage`, `deterministic`.
   Only listed processes are exposed. The file is hot-reloaded by a watcher in `ProviderConfigFileAdapter`.
+- `UMP_PROVIDERS_SOURCE=file|db` (default `file`) picks the `ProvidersPort` adapter in `asgi.py`.
+  `db` reads the model registry (schema `registry`, migration 0003) through
+  `ProviderConfigDbAdapter`: an in-memory snapshot refreshed via Postgres LISTEN/NOTIFY.
+  Model-server credentials are stored Fernet-encrypted (`UMP_REGISTRY_CREDENTIALS_KEY`);
+  There is no providers.yaml import; `scripts/seed_registry_dev.sql` seeds the mock server for local
+  `db` mode (run it after `ump-migrate upgrade head`).
+  Both adapters share the lookup rules in `core/models/providers_config.py::ProvidersSnapshot`.
 - Inbound auth is JWT/JWKS (`JwtAuthAdapter`), off by default (`UMP_AUTH_ENABLED=false`).
   Authorization is role-based and lives in `core/services/authorization.py`: role `{provider}` grants the
   whole provider, `{provider}:{process}` a single process, and `anonymous-access: true` bypasses auth.

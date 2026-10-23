@@ -43,7 +43,7 @@ Artefacts:
 | D10 | **The registry catalogue follows `UMP_PUBLIC_PROCESSES`.** | `true`: published model cards are readable by anyone, including anonymous callers. `false`: `viewer` (or `user`) required. |
 | D11 | **Retention: 3 months** for the audit log. | Daily delete by `ump-retention`. See [Retention](#retention-3-months). |
 | D12 | **Minimal schema: four tables.** One row per model; descriptive model-card parts as JSONB; workflow rules in the core. | See [Simplification](#simplification-what-was-dropped-and-why). |
-| D13 | **Multilingual model cards** via language maps per field (`{"de": "…", "en": "…"}`), with a per-model default language that is always required. | No extra table; read API resolves one language with fallback. See [Multilingual content](#multilingual-content). |
+| D13 | **Multilingual model cards** via language maps per field (`{"en": "…", "de": "…"}`), with a per-model default language that is always required. English is the platform default. | No extra table; read API resolves one language with fallback. See [Multilingual content](#multilingual-content). |
 
 ## Simplification: what was dropped and why
 
@@ -65,7 +65,7 @@ own (audit log).
 | `model_test_case`, `model_reference`, `model_application` | `test_cases`, `literature`, `applications` JSONB | Not queryable as rows (a GIN index can be added if search is needed). |
 | `model_deployment` | columns on `model` + `process_config` JSONB | One model = one remote process (was already 1:1 in practice). |
 | `process_interface_snapshot` (history) | `verified_interface` + `current_interface_sha256` on `model` | No history of past interfaces; drift events with a diff summary are in the audit log for 3 months. |
-| `credentials_secret_ref` alternative | `credentials` (encrypted) only | Ops can no longer point at a Kubernetes secret; the import command encrypts existing credentials instead. |
+| `credentials_secret_ref` alternative | `credentials` (encrypted) only | Ops can no longer point at a Kubernetes secret; credentials are entered through onboarding (phase B) and encrypted there. |
 | monthly partitions + retention functions | plain table + daily `DELETE` | Nothing relevant at the expected volume. |
 | `deprecated` status, `hosting`, server operator | — | Can be a note on the model card. |
 
@@ -213,19 +213,20 @@ foreign key, because it must outlive both.
 Providers may describe a model in several languages (D13).
 
 **Storage.** Every free-text model-card field is a language map `L`:
-`{"de": "Wachstum des Radnetzes", "en": "Bike network growth"}`. This applies to
+`{"en": "Bike network growth", "de": "Wachstum des Radnetzes"}`. This applies to
 `full_name`, `short_description`, `purpose`, `limitations_risks`, `keywords` (a list per
 language), `io_notes` values and the text fields inside `applications` and `test_cases`.
 Not translated: slug, licence, URLs, `code_ref`, `version_label`, contributor names,
 `process_config`.
 
 **Rules.**
-- `model.default_lang` (default `de`) is the language that is always complete. The
+- `model.default_lang` (default `en`) is the language that is always complete. The
   database enforces it for `full_name` from creation and for `purpose` before review; the
   core enforces it for all other `L` fields that are filled at all.
-- Allowed language codes come from `UMP_REGISTRY_LANGUAGES` (default `de,en`, matching
-  UMP-X's i18n). The core rejects other keys and empty strings; the database only checks
-  the `default_lang` format.
+- Allowed language codes come from `UMP_REGISTRY_LANGUAGES` (default `en,de`, matching
+  UMP-X's i18n). The first entry is the default for new models, so English is the
+  default language unless onboarding sets `default_lang` explicitly. The core rejects
+  other keys and empty strings; the database only checks the `default_lang` format.
 - One core type, `LocalizedText = dict[LangCode, NonEmptyStr]`, with a
   `resolve(lang, default_lang)` helper, is used for every `L` field.
 
@@ -249,7 +250,7 @@ default language only. The interface hash is computed from the default-language 
 per platform language (see the DDL comment).
 
 **Known limits.**
-- Translations can go stale: editing the German `purpose` does not mark the English one as
+- Translations can go stale: editing the English `purpose` does not mark the German one as
   outdated. The audit log records which language changed when, but nothing flags it in the
   UI (see open questions).
 - Translations are model-card content, so under D12 they are not reviewed; a wrong
@@ -428,7 +429,7 @@ ops handled (in `providers.yaml` / Kubernetes secrets).
   `credentials_set: true|false`.
 - `ProviderConfigDbAdapter` decrypts when building `ProviderConfig.authentication`, which
   already holds `SecretStr`, so `RemoteAuthAdapter` needs no change.
-- The import command encrypts the credentials it reads from `providers.yaml`.
+- Onboarding (`POST`/`PATCH /servers`, phase B) encrypts the credentials it receives.
 
 ## Outbound request safety
 
@@ -549,10 +550,10 @@ registry writes in the same worker, and via Postgres `LISTEN/NOTIFY` for other w
 `CredentialCipherPort` and the session factory are injected in `asgi.py`; the adapter never
 constructs them.
 
-Selection: `UMP_PROVIDERS_SOURCE=file|db` (default `file`). Migration path: a one-off
-`ump-import-providers` command reads `providers.yaml` into the registry (one
-`provider_server` per provider, one `published` model per listed process, credentials
-encrypted, owner = a given `platform-admin` sub), then the setting is switched to `db`.
+Selection: `UMP_PROVIDERS_SOURCE=file|db` (default `file`). Migration path (decided
+2026-10-19): **no automatic import of `providers.yaml`.** Servers and models are entered
+through the registry API (phase B onboarding) and go through review; for local
+development `scripts/seed_registry_dev.sql` registers the bundled mock server.
 
 **Composition root (`asgi.py`):** construct the SQL (or in-memory) registry adapter, the
 audit adapter, the cipher, the providers adapter selected by `UMP_PROVIDERS_SOURCE`; inject
@@ -587,12 +588,41 @@ tested on PostgreSQL 16 (4 tables, credential rule, generated `exec_state`, four
 card-completeness checks, default-language checks and fallback, keyword search per
 language, JSONB type checks, provider view, audit guard and retention delete). The migration can execute it largely verbatim via `op.execute`.
 
+## Implementation status
+
+**Phase 0 (P1) and phase 2 are implemented**, plus the slice of phase 1 the import needs
+(branch `v3.0.0alpha/providers-db-adapter`):
+
+- **P1** — `ValidateAndResolveStep` halts with 404 for unconfigured/excluded processes (bare
+  ids resolve only to configured processes; the bare-id fallback is gone) and with 403
+  `Model deactivated` for deactivated ones.
+- **State rules (D7, D9)** — `ProcessConfig.state` (default `published`);
+  `AuthorizationService` refuses `deactivated` before the anonymous-access shortcut, admits
+  only `verifier` for `in_review`, and admits `verifier` for `published` too.
+  `can_list_process` hides `in_review` from non-verifiers in `GET /processes[/{id}]`;
+  `ProcessManager` never lists or describes `deactivated` processes.
+- **`ProviderConfigDbAdapter`** (`UMP_PROVIDERS_SOURCE=db`) — in-memory `ProvidersSnapshot`
+  (core; also used by the file adapter) rebuilt on startup, on `ump_providers_changed`
+  (triggers added to migration 0003), every `UMP_PROVIDERS_DB_POLL_INTERVAL` seconds as
+  fallback, and on `load_providers()`. Entered through the new `create_app(lifecycle=…)`
+  hook; one engine per worker is shared with the job repository.
+- **Credentials** — `CredentialCipherPort` + `FernetCredentialCipher`.
+  `UMP_REGISTRY_CREDENTIALS_KEY` takes comma-separated keys (first encrypts, all decrypt —
+  `MultiFernet`); this replaces the key-id prefix idea. The stored secret is the encrypted
+  JSON of the auth fields; `auth_config_to_secret` / `auth_config_from_secret` map it.
+- **No `providers.yaml` import** (dropped 2026-10-19; it existed briefly as
+  `ump-import-providers`). `scripts/seed_registry_dev.sql` seeds the mock server for local
+  work and for the Postgres tests of `ProviderConfigDbAdapter`. Servers with credentials
+  cannot be seeded in plain SQL — the ciphertext needs `UMP_REGISTRY_CREDENTIALS_KEY`.
+
+Not yet: the rest of phase 1 (full domain models, `GET /models`), phases 3–6.
+
 ## Implementation phases
 
 0. **Prerequisite P1.** Reject unconfigured/excluded processes on execution. Ships
    independently.
 1. **Schema + read side.** Migration 0003, domain models, `ModelRegistryPort` (SQL +
-   in-memory), `GET /models`. Import command for `providers.yaml`.
+   in-memory), `GET /models`. (The `providers.yaml` import was dropped, see above.)
 2. **Providers from the database.** `ProviderConfigDbAdapter`, `UMP_PROVIDERS_SOURCE`.
    Existing OGC behaviour must be unchanged — the existing test suite is the acceptance test.
 3. **Onboarding + model cards.** Servers, discovery, pre-fill, credentials, outbound checks.
@@ -620,7 +650,7 @@ no ordering dependence):
 - drift service with an in-test `HttpClientPort`: in_sync → drifted → restored;
   unreachable; audit event only on state change;
 - `ProviderConfigDbAdapter` produces `ProviderConfig` equal to what the file adapter produces
-  for the same `providers.yaml` (round trip via the import command);
+  for the same configuration (seeded rows vs. the expected `ProviderConfig`);
 - outbound checks: private/loopback/metadata addresses rejected, allowlisted host accepted;
 - credentials: never present in any API response; decrypt(encrypt(x)) == x; wrong key fails;
 - authorization matrix for every registry endpoint, including `UMP_AUTH_ENABLED=false`;
@@ -675,7 +705,7 @@ stops new runs (D9), catalogue follows `UMP_PUBLIC_PROCESSES` (D10), 3-month ret
 | `src/ump/adapters/web/fastapi.py` | MODIFY — include the registry router |
 | `src/ump/asgi.py` | MODIFY — wiring, `UMP_PROVIDERS_SOURCE`, drift task in lifespan |
 | `src/ump/core/settings.py`, `.env.example` | MODIFY — `UMP_PROVIDERS_SOURCE`, `UMP_REGISTRY_CREDENTIALS_KEY`, `UMP_INTERFACE_CHECK_INTERVAL_SECONDS`, `UMP_REGISTRY_ALLOW_HTTP`, `UMP_REGISTRY_ALLOWED_PRIVATE_HOSTS`, `UMP_REGISTRY_LANGUAGES` |
-| `src/ump/cli.py`, `pyproject.toml` | MODIFY — `ump-import-providers`, `ump-retention` commands |
+| `src/ump/cli.py`, `pyproject.toml` | MODIFY — `ump-retention` command |
 | `charts/urban-model-platform/templates/cronjob-retention.yaml` | CREATE — daily `ump-retention` |
 | `tests/test_registry_*.py` | CREATE |
 | `docs/diagrams/model-registry-uml.mmd` (+ `.svg`, `.png`) | EXISTS — keep in sync |

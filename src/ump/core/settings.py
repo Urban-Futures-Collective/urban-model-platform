@@ -10,8 +10,9 @@ imports do not fail when modules call `logger.info` during initialization.
 
 import logging
 from pathlib import Path
+from typing import Literal
 
-from pydantic import FilePath, HttpUrl, SecretStr, computed_field, field_validator
+from pydantic import HttpUrl, SecretStr, computed_field, field_validator
 from pydantic_settings import BaseSettings
 from rich import print
 
@@ -28,7 +29,22 @@ class UmpSettings(BaseSettings):
         "extra": "ignore",  # Ignoriere unbekannte Umgebungsvariablen
     }
     UMP_LOG_LEVEL: str = "INFO"
-    UMP_PROVIDERS_FILE: FilePath = Path("providers.yaml")
+    # Where provider configuration comes from: "file" (providers.yaml, default,
+    # hot-reloaded) or "db" (model registry, schema `registry`; needs the
+    # UMP_DATABASE_* settings and migration 0003). See REF-F12.
+    UMP_PROVIDERS_SOURCE: Literal["file", "db"] = "file"
+    # Only read when UMP_PROVIDERS_SOURCE=file. A missing file is logged by the
+    # file adapter rather than failing settings validation, so db deployments
+    # need no providers.yaml.
+    UMP_PROVIDERS_FILE: Path = Path("providers.yaml")
+    # Fernet key(s) encrypting model-server credentials in the registry,
+    # comma-separated; the first encrypts, all decrypt (key rotation).
+    # Generate one with: python -c "from cryptography.fernet import Fernet;
+    # print(Fernet.generate_key().decode())"
+    UMP_REGISTRY_CREDENTIALS_KEY: SecretStr | None = None
+    # Fallback re-read interval of the db providers snapshot (seconds); changes
+    # normally arrive immediately via LISTEN/NOTIFY.
+    UMP_PROVIDERS_DB_POLL_INTERVAL: float = 30.0
     UMP_API_SERVER_URL: str = "http://localhost:8000/"
     UMP_API_SERVER_HOST: str = "0.0.0.0"
     UMP_API_SERVER_PORT: int = 8000

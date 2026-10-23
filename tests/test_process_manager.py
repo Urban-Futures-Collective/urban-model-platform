@@ -39,7 +39,7 @@ class FakeProvidersService(ProvidersPort):
         )
 
     def get_process_config(self, provider_name: str, process_id: str):
-        raise NotImplementedError
+        return None  # no per-process configuration in this fake
 
     def list_providers(self) -> List[str]:
         return [self._provider.name]
