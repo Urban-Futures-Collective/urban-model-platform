@@ -660,7 +660,74 @@ language, JSONB type checks, provider view, audit guard and retention delete). T
   schemas) to a snapshot generated from commit 511a7e9, i.e. before the registry work.
 - Without a database the registry uses the in-memory repository (dev only).
 
-Not yet: phases B–E of the registry API, drift checks, retention.
+**Registry API phase B is implemented** (branch `v3.0.0alpha/registry-api-phase-b`):
+`POST /servers`, `PATCH /servers/{id}`, `POST /servers/{id}/discover`,
+`POST /servers/{id}/models`, `PATCH /models/{id}`.
+
+- Services `RegistryOnboardingService` (servers, discovery, drafts) and `RegistryCardService`
+  (card edits); input models and JSONB shapes in `core/models/registry/card.py` (language maps
+  restricted to `UMP_REGISTRY_LANGUAGES`, no empty texts, SPDX licence, contributor roles, …).
+- **Audit:** services build an `AuditEvent` (actor, role snapshot, request id from the
+  correlation id, details without secrets, before/after diff for card edits) and pass it to
+  the repository write, which stores both in one transaction — tested against Postgres for
+  success, unique conflicts, stale updates and all-or-nothing batches.
+- **Concurrency:** `ETag` on `GET`/`PATCH` of servers and models, derived from `updated_at`;
+  `PATCH` needs `If-Match` (428 without, 412 if stale; `*` is not accepted). Repositories
+  update conditionally on `updated_at`.
+- **Credentials:** encrypted before the repository; `authentication: null` switches to NoAuth
+  and deletes the secret; 503 if `UMP_REGISTRY_CREDENTIALS_KEY` is missing.
+- **Outbound safety — deviation from "no new outbound HTTP port":** discovery uses a new
+  `SafeFetchPort` (`adapters/safe_fetch_aiohttp.py`). The checks must run when connecting —
+  a resolver wrapper drops non-public addresses, so a DNS answer cannot change between check
+  and use — and the execution client (`HttpClientPort`) follows redirects and has no size cap.
+  Settings: `UMP_REGISTRY_ALLOW_HTTP`, `UMP_REGISTRY_ALLOWED_PRIVATE_HOSTS`,
+  `UMP_REGISTRY_FETCH_TIMEOUT`, `UMP_REGISTRY_FETCH_MAX_BYTES`.
+- **Drafts:** pre-filled from the raw description (title → `full_name`, description,
+  keywords, version, interface hash in `current_interface_sha256`); a translation is stored
+  only if the server answers `Accept-Language` differently. Slug collisions get `-2`, `-3`, …
+  Existing models are reported, not duplicated.
+- **Card rules:** owner only (`provider` role); 403 if the caller can see the model, else 404;
+  no edits while `deactivated`; the 0003 invariants are checked first with readable errors.
+  **`process_config` (execution settings such as `anonymous-access`) is editable only in
+  `draft` and `changes_requested`** — it changes who may run the model, so on a model in
+  review or published it must go through review. (Decision taken in implementation; revisit
+  with open question 3.)
+- Writes that can change the provider snapshot call `ProvidersPort.load_providers()`.
+- Writes need an authenticated caller, so `UMP_AUTH_ENABLED=false` rejects them (401).
+
+Known limitation: the execution path (`HttpClientPort`) is not address-checked, so a server
+whose DNS later points at an internal address would be reached by forwarded executions. The
+drift check (phase D) re-validates `base_url` periodically; pinning execution traffic would
+need the guarded resolver in `AioHttpClientAdapter` too.
+
+**Registry API phase C is implemented** (branch `v3.0.0alpha/registry-api-phase-c`):
+`POST /models/{id}/transitions`, `POST /models/{id}/reverify`, `PATCH /models/{id}/owner`.
+
+- The status graph and role rules are pure core logic (`core/models/registry/workflow.py`,
+  exhaustively tested): `owner` steps need the owner holding `provider`; `reviewer` steps a
+  `verifier` who is not the owner (four-eyes, also for an owner who holds `verifier`);
+  deactivation a `verifier` or `platform-admin`.
+- Choices taken in implementation: **a note is required** for `changes_requested`,
+  `rejected`, the `published → in_review` reset and every deactivation (the other side needs
+  the reason); **the card must be complete** (`purpose` in `default_lang`, `license`) already
+  at `submitted`, so the owner learns it when submitting rather than at pick-up;
+  `status_note` holds the note of the latest step.
+- **Verification job check (decided 2026-10-19):** `verified` and `reverify` need a
+  `verification_job_id` that exists in UMP's job store, was started by the verifier, ran
+  this model (`{provider}:{process}`), finished `successful`, and was started after the
+  current review round began (after the last verification, for `reverify`).
+- On `verified` / `reverify` the current raw description is fetched through `SafeFetchPort`
+  **in the model's default language** (the hash is defined on that response) and stored as
+  `verified_interface` + hash; `interface_state = in_sync`.
+- `published_at` is set on the first publication only (role vocabulary, D8). Steps that
+  change `exec_state` reload the provider snapshot, so `/v1.0` sees publish, reset and
+  deactivation at once. `If-Match` is optional on the POSTs and required on `PATCH /owner`.
+- Owner transfer (platform admin) refuses a new owner who verified the model (four-eyes).
+- A Postgres end-to-end test runs register → discover → drafts → card edit → submit →
+  review → verify → publish on the real adapters; every write passes the 0003 CHECKs and the
+  model appears in `v_providers_config`.
+
+Not yet: phases D–E of the registry API, drift checks, retention.
 
 ## Implementation phases
 

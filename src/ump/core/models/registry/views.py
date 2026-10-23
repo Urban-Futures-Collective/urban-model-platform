@@ -100,3 +100,30 @@ class RoleVocabulary(BaseModel):
     """Model-access role names of every model ever published (D8, REF-F11)."""
 
     roles: list[str]
+
+
+class DiscoveredProcess(BaseModel):
+    """A process the server advertises, and whether it is registered yet."""
+
+    id: str
+    title: str | None = None
+    description: str | None = None
+    version: str | None = None
+    model_id: UUID | None = None  # set if already registered
+
+
+class DiscoveryResult(BaseModel):
+    server_id: UUID
+    processes: list[DiscoveredProcess]
+
+
+class CreatedModel(BaseModel):
+    id: UUID
+    slug: str
+    remote_process_id: str
+    status: str
+
+
+class ModelsCreated(BaseModel):
+    created: list[CreatedModel]
+    existing: list[CreatedModel]  # already registered, left unchanged

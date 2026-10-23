@@ -1,18 +1,26 @@
 """In-memory ModelRegistryPort for tests and database-less development.
 
 Enforces the uniqueness rules of migration 0003 (server name, model slug,
-server + remote process) so tests see the same conflicts as the database, and
-fills the timestamps the database would set.
+server + remote process) and the optimistic-concurrency rule of the port, so
+tests see the same conflicts as the database. Fills the timestamps the
+database would set, and keeps the audit events in ``audit`` (written together
+with the change, or not at all — like the SQL transaction).
 """
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Callable
 from uuid import UUID
 
-from ump.core.interfaces.model_registry import ModelQuery, ModelRegistryPort
+from ump.core.interfaces.model_registry import (
+    ModelQuery,
+    ModelRegistryPort,
+    RegistryConflictError,
+    StaleWriteError,
+)
 from ump.core.models.registry import AppUser, ProviderServer, RegistryModel
+from ump.core.models.registry.audit import AuditEvent
 
 
 class InMemoryRegistryRepository(ModelRegistryPort):
@@ -23,11 +31,22 @@ class InMemoryRegistryRepository(ModelRegistryPort):
         self.users: dict[str, AppUser] = {}
         self.servers: dict[str, ProviderServer] = {}
         self.models: dict[tuple[UUID, str], RegistryModel] = {}
+        self.audit: list[AuditEvent] = []
+        self._last_now: datetime | None = None
+
+    def _now(self) -> datetime:
+        # strictly increasing, so every write changes updated_at (and the ETag)
+        now = self._clock()
+        last = self._last_now
+        if last is not None and now <= last:
+            now = last + timedelta(microseconds=1)
+        self._last_now = now
+        return now
 
     # --- accounts ---------------------------------------------------------
 
     async def upsert_user(self, user: AppUser) -> AppUser:
-        now = self._clock()
+        now = self._now()
         existing = self.users.get(user.sub)
         if existing is None:
             stored = user.model_copy(update={"first_seen_at": now, "last_seen_at": now})
@@ -69,12 +88,32 @@ class InMemoryRegistryRepository(ModelRegistryPort):
             if owner_sub is None or s.owner_sub == owner_sub
         ]
 
-    async def create_provider_server(self, server: ProviderServer) -> ProviderServer:
+    async def create_provider_server(
+        self, server: ProviderServer, *, audit: AuditEvent
+    ) -> ProviderServer:
         if server.name in self.servers:
-            raise ValueError(f"provider_server {server.name!r} already exists")
-        now = self._clock()
+            raise RegistryConflictError(f"provider_server {server.name!r} exists")
+        now = self._now()
         stored = server.model_copy(update={"created_at": now, "updated_at": now})
         self.servers[server.name] = stored
+        self.audit.append(audit)
+        return stored.model_copy()
+
+    async def update_provider_server(
+        self, server: ProviderServer, *, expected_updated_at, audit: AuditEvent
+    ) -> ProviderServer:
+        current = await self.get_provider_server_by_id(server.id)
+        if current is None or current.updated_at != expected_updated_at:
+            raise StaleWriteError(str(server.id))
+        stored = server.model_copy(
+            update={
+                "name": current.name,
+                "created_at": current.created_at,
+                "updated_at": self._now(),
+            }
+        )
+        self.servers[current.name] = stored
+        self.audit.append(audit)
         return stored.model_copy()
 
     # --- models -----------------------------------------------------------
@@ -106,13 +145,46 @@ class InMemoryRegistryRepository(ModelRegistryPort):
             if m.published_at is not None
         )
 
-    async def create_model(self, model: RegistryModel) -> RegistryModel:
-        key = (model.provider_server_id, model.remote_process_id)
-        if key in self.models:
-            raise ValueError(f"model {key!r} already exists")
-        if any(m.slug == model.slug for m in self.models.values()):
-            raise ValueError(f"model slug {model.slug!r} already exists")
-        now = self._clock()
-        stored = model.model_copy(update={"created_at": now, "updated_at": now})
-        self.models[key] = stored
+    async def get_model_by_slug(self, slug: str) -> RegistryModel | None:
+        for model in self.models.values():
+            if model.slug == slug:
+                return model.model_copy()
+        return None
+
+    async def create_models(
+        self, models: list[RegistryModel], *, audit: list[AuditEvent]
+    ) -> list[RegistryModel]:
+        slugs = {m.slug for m in self.models.values()}
+        keys = set(self.models)
+        for model in models:  # check everything first: all or nothing
+            key = (model.provider_server_id, model.remote_process_id)
+            if key in keys or model.slug in slugs:
+                raise RegistryConflictError(f"model {model.slug!r} exists")
+            keys.add(key)
+            slugs.add(model.slug)
+        now = self._now()
+        stored = []
+        for model in models:
+            row = model.model_copy(update={"created_at": now, "updated_at": now})
+            self.models[(model.provider_server_id, model.remote_process_id)] = row
+            stored.append(row.model_copy())
+        self.audit.extend(audit)
+        return stored
+
+    async def update_model(
+        self, model: RegistryModel, *, expected_updated_at, audit: AuditEvent
+    ) -> RegistryModel:
+        current = await self.get_model_by_id(model.id)
+        if current is None or current.updated_at != expected_updated_at:
+            raise StaleWriteError(str(model.id))
+        stored = model.model_copy(
+            update={
+                "provider_server_id": current.provider_server_id,
+                "remote_process_id": current.remote_process_id,
+                "created_at": current.created_at,
+                "updated_at": self._now(),
+            }
+        )
+        self.models[(current.provider_server_id, current.remote_process_id)] = stored
+        self.audit.append(audit)
         return stored.model_copy()
