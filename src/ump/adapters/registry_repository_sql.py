@@ -9,6 +9,10 @@ and not mapped (the core derives it, see ``exec_state_for``). Columns with
 database defaults (timestamps) are left out of INSERTs when the domain value is
 None, and every write returns the stored row.
 
+Every write and its audit row run in one transaction. Updates are conditional
+on ``updated_at`` (optimistic concurrency) and set it to ``now()``. A unique
+violation becomes ``RegistryConflictError``.
+
 The session factory is injected by the composition root.
 """
 
@@ -18,13 +22,20 @@ from datetime import datetime
 from typing import Any, Optional
 from uuid import UUID
 
-from sqlalchemy import Column, DateTime, LargeBinary, func, or_
-from sqlalchemy.dialects.postgresql import JSONB, insert
+from sqlalchemy import Column, DateTime, LargeBinary, Text, func, or_, update
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB, insert
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlmodel import Field, SQLModel, select
 
-from ump.core.interfaces.model_registry import ModelQuery, ModelRegistryPort
+from ump.core.interfaces.model_registry import (
+    ModelQuery,
+    ModelRegistryPort,
+    RegistryConflictError,
+    StaleWriteError,
+)
 from ump.core.models.registry import AppUser, ProviderServer, RegistryModel
+from ump.core.models.registry.audit import AuditEvent
 
 SCHEMA = "registry"
 
@@ -123,7 +134,50 @@ class ModelRecord(SQLModel, table=True):
     updated_at: Optional[datetime] = _tz()
 
 
+class AuditLogRecord(SQLModel, table=True):
+    """Append-only; ``id`` and ``occurred_at`` come from the database."""
+
+    __tablename__: str = "audit_log"
+    __table_args__ = {"schema": SCHEMA}
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    occurred_at: Optional[datetime] = _tz()
+    actor_sub: Optional[str] = None
+    actor_roles: list = Field(
+        default=None, sa_column=Column(ARRAY(Text), nullable=False)
+    )
+    action: str
+    model_id: Optional[UUID] = None
+    job_id: Optional[str] = None
+    outcome: str
+    details: dict = _jsonb()
+    request_id: Optional[str] = None
+
+
 _USERS = AppUserRecord.__table__
+_AUDIT = AuditLogRecord.__table__
+_UNIQUE_VIOLATION = "23505"
+
+# never rewritten by an update
+_SERVER_IDENTITY = {"id", "name", "created_at", "updated_at"}
+_MODEL_IDENTITY = {
+    "id",
+    "provider_server_id",
+    "remote_process_id",
+    "created_at",
+    "updated_at",
+}
+
+
+def _audit_values(event: AuditEvent) -> dict[str, Any]:
+    return event.model_dump(mode="json")
+
+
+def _is_unique_violation(exc: IntegrityError) -> bool:
+    code = getattr(exc.orig, "pgcode", None) or getattr(exc.orig, "sqlstate", None)
+    return code == _UNIQUE_VIOLATION
+
+
 _SERVERS = ProviderServerRecord.__table__
 _MODELS = ModelRecord.__table__
 
@@ -154,6 +208,24 @@ class SQLModelRegistryRepository(ModelRegistryPort):
     async def _all(self, stmt: Any) -> list[Any]:
         async with self._session_factory() as session:
             return list((await session.execute(stmt)).all())
+
+    async def _write(self, stmts: list[Any], audits: list[AuditEvent]) -> list[Any]:
+        """Run *stmts* and insert *audits* in one transaction; first row of each."""
+        try:
+            async with self._session_factory() as session:
+                async with session.begin():
+                    rows = [(await session.execute(stmt)).first() for stmt in stmts]
+                    if audits:
+                        await session.execute(
+                            insert(_AUDIT), [_audit_values(a) for a in audits]
+                        )
+                    if any(row is None for row in rows):
+                        raise StaleWriteError("row changed or missing")
+                    return rows
+        except IntegrityError as exc:
+            if _is_unique_violation(exc):
+                raise RegistryConflictError(str(exc.orig)) from exc
+            raise
 
     # --- accounts ---------------------------------------------------------
 
@@ -197,9 +269,28 @@ class SQLModelRegistryRepository(ModelRegistryPort):
             stmt = stmt.where(_SERVERS.c.owner_sub == owner_sub)
         return [_server(r) for r in await self._all(stmt)]
 
-    async def create_provider_server(self, server: ProviderServer) -> ProviderServer:
+    async def create_provider_server(
+        self, server: ProviderServer, *, audit: AuditEvent
+    ) -> ProviderServer:
         stmt = insert(_SERVERS).values(**_insert_values(server)).returning(*_SERVERS.c)
-        return _server(await self._one(stmt, commit=True))
+        (row,) = await self._write([stmt], [audit])
+        return _server(row)
+
+    async def update_provider_server(
+        self, server: ProviderServer, *, expected_updated_at, audit: AuditEvent
+    ) -> ProviderServer:
+        values = server.model_dump(exclude=_SERVER_IDENTITY)
+        stmt = (
+            update(_SERVERS)
+            .where(
+                _SERVERS.c.id == server.id,
+                _SERVERS.c.updated_at == expected_updated_at,
+            )
+            .values(**values, updated_at=func.now())
+            .returning(*_SERVERS.c)
+        )
+        (row,) = await self._write([stmt], [audit])
+        return _server(row)
 
     # --- models -----------------------------------------------------------
 
@@ -245,6 +336,31 @@ class SQLModelRegistryRepository(ModelRegistryPort):
         )
         return [(r[0], r[1]) for r in rows]
 
-    async def create_model(self, model: RegistryModel) -> RegistryModel:
-        stmt = insert(_MODELS).values(**_insert_values(model)).returning(*_MODELS.c)
-        return _model(await self._one(stmt, commit=True))
+    async def get_model_by_slug(self, slug: str) -> RegistryModel | None:
+        row = await self._one(select(*_MODELS.c).where(_MODELS.c.slug == slug))
+        return _model(row) if row else None
+
+    async def create_models(
+        self, models: list[RegistryModel], *, audit: list[AuditEvent]
+    ) -> list[RegistryModel]:
+        stmts = [
+            insert(_MODELS).values(**_insert_values(m)).returning(*_MODELS.c)
+            for m in models
+        ]
+        return [_model(row) for row in await self._write(stmts, audit)]
+
+    async def update_model(
+        self, model: RegistryModel, *, expected_updated_at, audit: AuditEvent
+    ) -> RegistryModel:
+        values = model.model_dump(exclude=_MODEL_IDENTITY)
+        stmt = (
+            update(_MODELS)
+            .where(
+                _MODELS.c.id == model.id,
+                _MODELS.c.updated_at == expected_updated_at,
+            )
+            .values(**values, updated_at=func.now())
+            .returning(*_MODELS.c)
+        )
+        (row,) = await self._write([stmt], [audit])
+        return _model(row)

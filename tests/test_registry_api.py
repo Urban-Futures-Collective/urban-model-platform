@@ -15,20 +15,21 @@ from fastapi.testclient import TestClient
 from ump.adapters.colon_process_id_validator import ColonProcessId
 from ump.adapters.job_repository_inmemory import InMemoryJobRepository
 from ump.adapters.registry_repository_inmemory import InMemoryRegistryRepository
+from ump.adapters.remote_auth_adapter import RemoteAuthAdapter
 from ump.adapters.web.fastapi import create_app
 from ump.adapters.web.registry_router import RegistryServices
 from ump.core.interfaces.auth import AuthContext, AuthPort
 from ump.core.interfaces.http_client import HttpClientPort
 from ump.core.interfaces.providers import ProvidersPort
+from ump.core.interfaces.safe_fetch import SafeFetchPort
 from ump.core.managers.process_manager import ProcessManager
 from ump.core.models.registry import AppUser, ProviderServer, RegistryModel
+from ump.core.models.registry.audit import AuditEvent
 from ump.core.services.authorization import AuthorizationService
-from ump.core.services.registry_accounts import RegistryAccountService
-from ump.core.services.registry_catalog import RegistryCatalogService
-from ump.core.services.registry_servers import RegistryServerService
 
 T0 = datetime(2026, 10, 1, tzinfo=timezone.utc)
 SHA = "a" * 64
+SEED = AuditEvent(actor_sub=None, action="test.seed")
 
 CALLERS: Dict[str, AuthContext] = {
     "viewer": AuthContext("v-1", ["viewer"], True, email="v@x", name="Vera"),
@@ -89,6 +90,14 @@ class NoHttp(HttpClientPort):
         return None
 
 
+class NoFetch(SafeFetchPort):
+    def check_url(self, url):
+        pass
+
+    async def get_json(self, url, headers=None):
+        raise AssertionError("phase A tests make no outbound calls")
+
+
 def _model(server: ProviderServer, pid: str, status: str, owner="owner-1", **kw):
     published = status in ("published", "deactivated")
     return RegistryModel(
@@ -117,10 +126,12 @@ async def _seed(repo: InMemoryRegistryRepository) -> Dict[str, Any]:
             owner_sub="owner-1",
             auth_type="BasicAuth",
             credentials=b"ciphertext-never-returned",
-        )
+        ),
+        audit=SEED,
     )
     other = await repo.create_provider_server(
-        ProviderServer(name="other", base_url="http://o.local/", owner_sub="owner-2")
+        ProviderServer(name="other", base_url="http://o.local/", owner_sub="owner-2"),
+        audit=SEED,
     )
     models = {
         "pub": _model(
@@ -137,8 +148,7 @@ async def _seed(repo: InMemoryRegistryRepository) -> Dict[str, Any]:
         "foreign-draft": _model(other, "fd", "draft", owner="owner-2"),
         "foreign-pub": _model(other, "fp", "published", owner="owner-2"),
     }
-    for m in models.values():
-        await repo.create_model(m)
+    await repo.create_models(list(models.values()), audit=[SEED] * len(models))
     return {"srv": srv, "other": other, **models}
 
 
@@ -165,10 +175,15 @@ def _client(public: bool = False):
         process_id_validator=validator,
         auth_port=TokenAuth(),
         authorization_service=authz,
-        registry=RegistryServices(
-            catalog=RegistryCatalogService(repo, authz, public_catalogue=public),
-            servers=RegistryServerService(repo, authz),
-            accounts=RegistryAccountService(repo),
+        registry=RegistryServices.create(
+            repo,
+            authorization=authz,
+            providers=providers,
+            fetch=NoFetch(),
+            remote_auth=RemoteAuthAdapter(),
+            cipher=None,
+            languages=["en", "de"],
+            public_catalogue=public,
         ),
     )
     return TestClient(app), repo, seeded

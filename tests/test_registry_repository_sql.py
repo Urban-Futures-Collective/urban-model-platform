@@ -19,6 +19,7 @@ from ump.adapters.registry_repository_inmemory import InMemoryRegistryRepository
 from ump.adapters.registry_repository_sql import SQLModelRegistryRepository
 from ump.core.interfaces.model_registry import ModelQuery
 from ump.core.models.registry import AppUser, ProviderServer, RegistryModel
+from ump.core.models.registry.audit import AuditEvent
 
 DB_URL = os.environ.get("UMP_TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(
@@ -27,6 +28,7 @@ pytestmark = pytest.mark.skipif(
 REPO_ROOT = Path(__file__).resolve().parents[1]
 T0 = datetime(2026, 10, 1, tzinfo=timezone.utc)
 SHA = "b" * 64
+SEED = AuditEvent(actor_sub=None, action="test.seed")
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -97,13 +99,13 @@ async def _seed(repo):
     for sub in ("u1", "u2", "v"):
         await repo.upsert_user(AppUser(sub=sub))
     a = await repo.create_provider_server(
-        ProviderServer(name="a", base_url="http://a/", owner_sub="u1")
+        ProviderServer(name="a", base_url="http://a/", owner_sub="u1"), audit=SEED
     )
     b = await repo.create_provider_server(
-        ProviderServer(name="b", base_url="http://b/", owner_sub="u2")
+        ProviderServer(name="b", base_url="http://b/", owner_sub="u2"), audit=SEED
     )
-    for model in _models(a, b):
-        await repo.create_model(model)
+    models = _models(a, b)
+    await repo.create_models(models, audit=[SEED] * len(models))
     return a, b
 
 
@@ -131,8 +133,8 @@ async def test_list_models_matches_in_memory_reference(sql_repo):
     # same ids in both repositories, so provider filters line up
     for server in (a_sql, b_sql):
         memory.servers[server.name] = server
-    for model in _models(a_sql, b_sql):
-        await memory.create_model(model)
+    models = _models(a_sql, b_sql)
+    await memory.create_models(models, audit=[SEED] * len(models))
 
     for make in QUERIES:
         query = make(a_sql, b_sql)

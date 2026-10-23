@@ -3,10 +3,11 @@
 - ProcessManager's process-list cache follows the provider configuration
   (a newly published model appears in /v1.0/processes at once);
 - RegistryAccountService.touch is throttled and never fails a request;
-- language helpers.
+- language helpers; English is the default language.
 """
 
 from typing import Any, Dict, List
+from uuid import uuid4
 
 import pytest
 
@@ -17,12 +18,14 @@ from ump.core.interfaces.http_client import HttpClientPort
 from ump.core.interfaces.providers import ProvidersPort
 from ump.core.managers.process_manager import ProcessManager
 from ump.core.models.providers_config import ProviderConfig, ProvidersSnapshot
+from ump.core.models.registry.entities import RegistryModel
 from ump.core.models.registry.localized import (
     parse_accept_language,
     pick_language,
     resolve,
 )
 from ump.core.services.registry_accounts import RegistryAccountService
+from ump.core.settings import UmpSettings
 
 URL = "http://srv.local/"
 
@@ -148,3 +151,16 @@ def test_language_helpers():
     assert pick_language(["fr"], ["de", "en"], "en") == "en"
     assert resolve({"de": "x"}, "en", "de") == "x"
     assert resolve({}, "en", "de") is None
+
+
+def test_english_is_the_default_language(monkeypatch):
+    monkeypatch.delenv("UMP_REGISTRY_LANGUAGES", raising=False)
+    assert UmpSettings(_env_file=None).UMP_REGISTRY_LANGUAGES[0] == "en"
+    model = RegistryModel(
+        slug="m",
+        provider_server_id=uuid4(),
+        remote_process_id="p",
+        owner_sub="o",
+        full_name={"en": "M"},
+    )
+    assert model.default_lang == "en"
