@@ -27,6 +27,7 @@ from ump.core.models.job import JobList, JobStatusInfo
 from ump.core.models.ogcp_exception import OGCExceptionResponse
 from ump.core.models.process import Process, ProcessList
 from ump.adapters.web.mcp import create_mcp_router
+from ump.adapters.web.registry_router import RegistryServices, create_registry_router
 from ump.core.services.authorization import AuthorizationService
 from ump.core.services.tool_catalog import ToolCatalogService
 from ump.core.settings import app_settings, logger
@@ -124,6 +125,7 @@ def create_app(
     tool_catalog_factory: Callable[[ProcessManager], ToolCatalogService]
     | None = None,
     lifecycle: Sequence[AbstractAsyncContextManager[Any]] = (),
+    registry: RegistryServices | None = None,
 ):
     """Create the FastAPI app.
 
@@ -515,6 +517,14 @@ def create_app(
         )
         for ver in getattr(app_settings, "UMP_MCP_CATALOG_VERSIONS", ["1"]):
             app.include_router(mcp_router, prefix=f"/mcp/v{ver}")
+
+    # Model registry API — its own version namespace, outside the OGC prefixes:
+    # the OGC API Processes endpoints are not changed by the registry
+    # (reports/REF-F12-model-registry.md, "API sketch").
+    if registry is not None:
+        registry_router = create_registry_router(get_auth=_get_auth, services=registry)
+        for ver in app_settings.UMP_REGISTRY_API_VERSIONS:
+            app.include_router(registry_router, prefix=f"/registry/v{ver}")
 
     # Dedicated route for the landing CSS. This is a robust fallback for environments
     # where StaticFiles mounting might not be available (packaged apps, different cwd).

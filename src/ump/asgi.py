@@ -28,9 +28,11 @@ from ump.adapters.remote_auth_adapter import RemoteAuthAdapter
 from ump.adapters.retry_tenacity import TenacityRetryAdapter
 from ump.adapters.site_info_static_adapter import StaticSiteInfoAdapter
 from ump.adapters.web.fastapi import create_app
+from ump.adapters.web.registry_router import RegistryServices
 from ump.core.config import JobManagerConfig
 from ump.core.interfaces.credential_cipher import CredentialCipherPort
 from ump.core.interfaces.job_repository import JobRepositoryPort
+from ump.core.interfaces.model_registry import ModelRegistryPort
 from ump.core.interfaces.providers import ProvidersPort
 from ump.core.logging_config import configure_logging
 from ump.core.managers.job_manager import JobManager
@@ -41,6 +43,9 @@ from ump.core.managers.observers import (
 )
 from ump.core.managers.process_manager import ProcessManager
 from ump.core.services.authorization import AuthorizationService
+from ump.core.services.registry_accounts import RegistryAccountService
+from ump.core.services.registry_catalog import RegistryCatalogService
+from ump.core.services.registry_servers import RegistryServerService
 from ump.core.services.tool_catalog import ToolCatalogService
 from ump.core.settings import app_settings, set_logger
 
@@ -187,6 +192,30 @@ else:
 # ---------------------------------------------------------------------------
 
 
+# Model registry: SQL when a database is configured, else in memory (dev only).
+if engine is not None:
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from ump.adapters.registry_repository_sql import SQLModelRegistryRepository
+
+    registry_repo: ModelRegistryPort = SQLModelRegistryRepository(
+        async_sessionmaker(engine, expire_on_commit=False)
+    )
+else:
+    from ump.adapters.registry_repository_inmemory import InMemoryRegistryRepository
+
+    registry_repo = InMemoryRegistryRepository()
+
+registry_services = RegistryServices(
+    catalog=RegistryCatalogService(
+        registry_repo,
+        authorization_service,
+        public_catalogue=app_settings.UMP_PUBLIC_PROCESSES,
+    ),
+    servers=RegistryServerService(registry_repo, authorization_service),
+    accounts=RegistryAccountService(registry_repo),
+)
+
 app = create_app(
     process_manager_factory=_process_manager_factory,
     http_client=http_client,
@@ -198,4 +227,5 @@ app = create_app(
     site_info=StaticSiteInfoAdapter(),
     tool_catalog_factory=_tool_catalog_factory,
     lifecycle=lifecycle,
+    registry=registry_services,
 )

@@ -560,12 +560,36 @@ audit adapter, the cipher, the providers adapter selected by `UMP_PROVIDERS_SOUR
 them into the new services; attach `AuditObserver`; start the drift-check task in the
 lifespan, guarded by `PollLockPort`.
 
-## API sketch (`/v1.0/registry`)
+## API sketch (`/registry/v1`)
 
 UMP extension, not OGC. JSON only, no trailing slashes (F1 conventions).
 
+Decided 2026-10-19:
+
+- **Mounted at `/registry/v{major}`** (`UMP_REGISTRY_API_VERSIONS`, default `["1"]`), outside
+  the OGC version loop — same reasoning as `/mcp/v1` (F10): `/v1.0` is the OGC standard's
+  number, the registry contract is UMP's own. **The OGC API Processes endpoints do not
+  change**: the registry reaches them only through the `ProvidersPort` snapshot (status →
+  `exec_state` → `ProcessConfig.state`). A test pins the OpenAPI of every `/v1.0/*` path.
+- **Audit rows are written by the repository method that makes the change**, in the same
+  transaction. The core still decides the content: services build an `AuditEvent` and pass
+  it to the write method (e.g. `update_model(model, audit=event)`). No unit-of-work port.
+- **Per-user LLM key** (v4 migration, with projects): stored encrypted via
+  `CredentialCipherPort`. `PUT`/`DELETE /me/llm-key`, `GET /me/llm-key` → `{set, provider,
+  updated_at}`; plus one owner-only plaintext read that is **called only by UMP-X's Nitro
+  server**, which relays the user's chat to the LLM — the key never reaches the browser.
+  Every plaintext read is audited (without the key).
+
+Delivery phases: **A** read + identity (`/me`, `/models`, `/servers`, `/roles/vocabulary`)
+· **B** onboarding (server create/edit, discover, drafts, card edits) · **C** workflow
+(transitions, reverify, owner transfer) · **D** drift + audit (`/interface`, `/rediscover`,
+`/audit`) · **E** with v4: `/me/llm-key`, projects.
+
 | Method | Path | Role |
 |---|---|---|
+| `GET` | `/me` — upserts `app_user` from the token, returns profile + platform roles | any authenticated user |
+| `PUT` · `DELETE` · `GET` | `/me/llm-key` (phase E) — `GET` returns `{set, provider, updated_at}` only | the user |
+| `GET` | `/me/llm-key/secret` (phase E) — plaintext, audited; called by UMP-X's Nitro server only | the user |
 | `POST` | `/servers` | `provider` |
 | `GET` | `/servers`, `/servers/{id}` | `provider` (own), `platform-admin` |
 | `PATCH` | `/servers/{id}` | owner, `platform-admin` |
@@ -615,7 +639,28 @@ language, JSONB type checks, provider view, audit guard and retention delete). T
   work and for the Postgres tests of `ProviderConfigDbAdapter`. Servers with credentials
   cannot be seeded in plain SQL — the ciphertext needs `UMP_REGISTRY_CREDENTIALS_KEY`.
 
-Not yet: the rest of phase 1 (full domain models, `GET /models`), phases 3–6.
+**Registry API phase A is implemented** (branch `v3.0.0alpha/registry-api`): `GET /registry/v1`
+`/me`, `/models`, `/models/{id}`, `/servers`, `/servers/{id}`, `/roles/vocabulary`.
+
+- Router `adapters/web/registry_router.py`, mounted per `UMP_REGISTRY_API_VERSIONS` outside the
+  OGC loop. Core services `RegistryCatalogService`, `RegistryServerService`,
+  `RegistryAccountService`; views in `core/models/registry/views.py`; role constants in
+  `core/models/registry/roles.py`; `AuthorizationService.require_platform_role`.
+- Catalogue visibility: `published` for everyone allowed to browse (D10); verifiers also see
+  every non-draft status, platform admins everything, owners all of their own; anything else
+  is 404. Review details (`status_note`, `verified_*`) only for owner / verifier / admin.
+- `ModelQuery` separates visibility (`visible_statuses` OR `visible_owner`) from filters;
+  `ModelQuery.matches` is the reference semantics, and a Postgres test checks the SQL adapter
+  against it. Keyset pagination by slug (`cursor`, `limit` ≤ 200).
+- `app_user` is upserted on `/me` and just-in-time on any authenticated registry request,
+  throttled per worker (`touch`); `AuthContext` gained optional `email` / `name`.
+- `ProcessManager` reuses a provider's cached process list only while its listable process ids
+  are unchanged, so a newly published model shows up in `/v1.0/processes` at once.
+- `tests/test_ogc_contract_unchanged.py` pins the `/v1.0/*` OpenAPI (paths + referenced
+  schemas) to a snapshot generated from commit 511a7e9, i.e. before the registry work.
+- Without a database the registry uses the in-memory repository (dev only).
+
+Not yet: phases B–E of the registry API, drift checks, retention.
 
 ## Implementation phases
 

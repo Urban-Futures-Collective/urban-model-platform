@@ -36,6 +36,8 @@ class ProcessManager(ProcessesPort):
         self._process_cache = ProcessListCache[ProcessSummary](
             expiry_seconds=cache_expiry_seconds
         )
+        # configured process ids each cached provider list was built from
+        self._cached_config_ids: Dict[str, frozenset[str]] = {}
         # cache individual process descriptions by id
         self._process_cache_by_id = ProcessCache[Process](
             expiry_seconds=cache_expiry_seconds
@@ -363,13 +365,23 @@ class ProcessManager(ProcessesPort):
             tuple[str, str, str]
         ] = []  # (provider_name, remote_id, canonical_id)
 
+        planned_ids: Dict[str, frozenset[str]] = {}
         for provider_name in provider_names:
+            configured = self._configured_process_ids(provider_name)
+            # Reuse the cached list only while the provider's listable processes
+            # are the ones it was built from: a newly published model (registry)
+            # or an added process (providers.yaml reload) must appear at once,
+            # not after the cache TTL.
+            configured_ids = frozenset(canonical for _, canonical in configured)
+            planned_ids[provider_name] = configured_ids
             cached = self._process_cache.get(provider_name)
-            if cached is not None:
+            if (
+                cached is not None
+                and self._cached_config_ids.get(provider_name) == configured_ids
+            ):
                 provider_summaries[provider_name] = list(cached)
                 continue
 
-            configured = self._configured_process_ids(provider_name)
             provider_summaries[provider_name] = []
 
             for remote_id, canonical_id in configured:
@@ -399,6 +411,7 @@ class ProcessManager(ProcessesPort):
             # so that a providers.yaml fix takes effect without waiting for TTL expiry.
             if summaries:
                 self._process_cache.set(provider_name, summaries)
+                self._cached_config_ids[provider_name] = planned_ids[provider_name]
 
         all_processes = [
             proc for summaries in provider_summaries.values() for proc in summaries

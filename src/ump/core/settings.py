@@ -91,6 +91,9 @@ class UmpSettings(BaseSettings):
     # the MCP protocol's own date-based revisions, which are negotiated between
     # the MCP server and its clients — not here. See REF-F10-mcp-endpoint.md.
     UMP_MCP_CATALOG_VERSIONS: list[str] = ["1"]
+    # Model registry API contract versions, mounted as /registry/v1/... — UMP's
+    # own contract, versioned like the MCP catalog (major only), not like OGC.
+    UMP_REGISTRY_API_VERSIONS: list[str] = ["1"]
     # When enabled, replace external links in fetched processes with local API links
     UMP_REWRITE_REMOTE_LINKS: bool = True
     # When true, JobManager verifies remote results immediately for terminal success responses
