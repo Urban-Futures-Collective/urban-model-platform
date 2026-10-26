@@ -10,8 +10,9 @@ imports do not fail when modules call `logger.info` during initialization.
 
 import logging
 from pathlib import Path
+from typing import Literal
 
-from pydantic import FilePath, HttpUrl, SecretStr, computed_field, field_validator
+from pydantic import HttpUrl, SecretStr, computed_field, field_validator
 from pydantic_settings import BaseSettings
 from rich import print
 
@@ -28,7 +29,22 @@ class UmpSettings(BaseSettings):
         "extra": "ignore",  # Ignoriere unbekannte Umgebungsvariablen
     }
     UMP_LOG_LEVEL: str = "INFO"
-    UMP_PROVIDERS_FILE: FilePath = Path("providers.yaml")
+    # Where provider configuration comes from: "file" (providers.yaml, default,
+    # hot-reloaded) or "db" (model registry, schema `registry`; needs the
+    # UMP_DATABASE_* settings and migration 0003). See REF-F12.
+    UMP_PROVIDERS_SOURCE: Literal["file", "db"] = "file"
+    # Only read when UMP_PROVIDERS_SOURCE=file. A missing file is logged by the
+    # file adapter rather than failing settings validation, so db deployments
+    # need no providers.yaml.
+    UMP_PROVIDERS_FILE: Path = Path("providers.yaml")
+    # Fernet key(s) encrypting model-server credentials in the registry,
+    # comma-separated; the first encrypts, all decrypt (key rotation).
+    # Generate one with: python -c "from cryptography.fernet import Fernet;
+    # print(Fernet.generate_key().decode())"
+    UMP_REGISTRY_CREDENTIALS_KEY: SecretStr | None = None
+    # Fallback re-read interval of the db providers snapshot (seconds); changes
+    # normally arrive immediately via LISTEN/NOTIFY.
+    UMP_PROVIDERS_DB_POLL_INTERVAL: float = 30.0
     UMP_API_SERVER_URL: str = "http://localhost:8000/"
     UMP_API_SERVER_HOST: str = "0.0.0.0"
     UMP_API_SERVER_PORT: int = 8000
@@ -75,6 +91,19 @@ class UmpSettings(BaseSettings):
     # the MCP protocol's own date-based revisions, which are negotiated between
     # the MCP server and its clients — not here. See REF-F10-mcp-endpoint.md.
     UMP_MCP_CATALOG_VERSIONS: list[str] = ["1"]
+    # Model registry API contract versions, mounted as /registry/v1/... — UMP's
+    # own contract, versioned like the MCP catalog (major only), not like OGC.
+    UMP_REGISTRY_API_VERSIONS: list[str] = ["1"]
+    # Languages model cards may use (D13); the first (English) is the default
+    # for new models. Must match UMP-X's i18n.
+    UMP_REGISTRY_LANGUAGES: list[str] = ["en", "de"]
+    # Outbound safety for user-supplied server URLs (REF-F12): https only unless
+    # this is true (dev only); private/loopback addresses only for these hosts
+    # (in-cluster model servers, e.g. "modelserver", "localhost" in dev).
+    UMP_REGISTRY_ALLOW_HTTP: bool = False
+    UMP_REGISTRY_ALLOWED_PRIVATE_HOSTS: list[str] = []
+    UMP_REGISTRY_FETCH_TIMEOUT: float = 10.0
+    UMP_REGISTRY_FETCH_MAX_BYTES: int = 2_000_000
     # When enabled, replace external links in fetched processes with local API links
     UMP_REWRITE_REMOTE_LINKS: bool = True
     # When true, JobManager verifies remote results immediately for terminal success responses

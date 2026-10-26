@@ -170,6 +170,10 @@ cython_debug/
 # secrets
 #secrets/*
 
+# misc
 geoserver_data
 postgresql_data
 scratch/*
+
+# graphify
+graphify-out/cache

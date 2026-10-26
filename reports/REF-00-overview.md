@@ -204,6 +204,9 @@ _Last updated: 2026-07-04_
 | [REF-F7-remote-auth.md](REF-F7-remote-auth.md) | Feature VII: Remote server authentication (UMP → provider) |
 | [REF-F8-execution-proxy.md](REF-F8-execution-proxy.md) | Feature VIII: UMP as execution proxy + Output format awareness + Large input data |
 | [REF-F9-horizontal-scaling.md](REF-F9-horizontal-scaling.md) | Feature IX: Horizontal scaling — multi-instance poll coordination |
+| [REF-F10-mcp-endpoint.md](REF-F10-mcp-endpoint.md) | Feature X: MCP tool-catalog endpoint |
+| [REF-F11-role-administration.md](REF-F11-role-administration.md) | Feature XI: Role administration (Keycloak Admin API, in UMP-X) |
+| [REF-F12-model-registry.md](REF-F12-model-registry.md) | Feature XII: Model registry (model cards, review workflow, provider onboarding, interface drift) |
 | [REF-IDEAS.md](REF-IDEAS.md) | Ideas (not yet scheduled) |
 
 ### Small changes (no feature number)

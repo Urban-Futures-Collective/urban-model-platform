@@ -1,8 +1,8 @@
 # ump/adapters/web/fastapi.py
 import uuid
-from contextlib import asynccontextmanager
+from contextlib import AbstractAsyncContextManager, AsyncExitStack, asynccontextmanager
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable, Sequence
 
 from fastapi import APIRouter, FastAPI, Request
 from fastapi.encoders import jsonable_encoder
@@ -27,6 +27,7 @@ from ump.core.models.job import JobList, JobStatusInfo
 from ump.core.models.ogcp_exception import OGCExceptionResponse
 from ump.core.models.process import Process, ProcessList
 from ump.adapters.web.mcp import create_mcp_router
+from ump.adapters.web.registry_router import RegistryServices, create_registry_router
 from ump.core.services.authorization import AuthorizationService
 from ump.core.services.tool_catalog import ToolCatalogService
 from ump.core.utils.api_paths import external_base
@@ -124,12 +125,19 @@ def create_app(
     site_info: SiteInfoPort | None = None,
     tool_catalog_factory: Callable[[ProcessManager], ToolCatalogService]
     | None = None,
+    lifecycle: Sequence[AbstractAsyncContextManager[Any]] = (),
+    registry: RegistryServices | None = None,
 ):
     """Create the FastAPI app.
 
     Adapters and concrete infrastructure (logging, repositories, providers) are
     assembled outside and passed as factories. This keeps the web adapter focused
     purely on HTTP concerns and lifecycle orchestration.
+
+    ``lifecycle`` are async context managers the composition root needs running
+    while the app serves (e.g. the db providers adapter's initial load and
+    background refresh). They are entered in order before the HTTP client and
+    any request, and exited in reverse order on shutdown.
     """
 
     # We intentionally do NOT configure logging here. Composition root (main)
@@ -138,6 +146,14 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        async with AsyncExitStack() as stack:
+            for resource in lifecycle:
+                await stack.enter_async_context(resource)
+            async with _serve(app):
+                yield
+
+    @asynccontextmanager
+    async def _serve(app: FastAPI):
         async with http_client as client:
             process_port = process_manager_factory(client)
             if process_port is None:
@@ -286,26 +302,28 @@ def create_app(
         response_model_by_alias=True,
     )
     async def get_all_processes(request: Request):
-        """List the processes the caller may see.
-
-        The catalog is filtered per caller rather than gated all-or-nothing:
-        an anonymous caller sees the processes marked ``anonymous-access: true``
-        and nothing else, which is what UMP_PUBLIC_PROCESSES has always claimed
-        ("per-process anonymous access is still controlled by providers.yaml")
-        and what v2 did via has_user_access_rights. An empty catalog is a valid
-        answer; this route does not 401.
-        """
+        if app.state.auth_port is not None and not app_settings.UMP_PUBLIC_PROCESSES:
+            auth = await _get_auth(request)
+            if not auth.is_authenticated:
+                raise OGCProcessException(
+                    OGCExceptionResponse(
+                        type="about:blank",
+                        title="Unauthorized",
+                        status=401,
+                        detail="Authentication required to view processes.",
+                        instance=str(request.url),
+                    )
+                )
         process_list = await app.state.process_port.get_all_processes()
-        if _catalog_is_unrestricted():
-            return process_list
-
-        auth = await _get_auth(request)
-        visible = [
-            summary
-            for summary in process_list.processes
-            if app.state.authz.can_access_process(auth, summary.pid)
-        ]
-        return ProcessList(processes=visible, links=process_list.links)
+        if app.state.authz is not None:
+            # Processes under review are only listed for verifiers (REF-F12 D7)
+            auth = await _get_auth(request)
+            process_list.processes = [
+                p
+                for p in process_list.processes
+                if app.state.authz.can_list_process(auth, p.pid)
+            ]
+        return process_list
 
     @api_router.get(
         "/processes/{process_id}",
@@ -337,6 +355,18 @@ def create_app(
                         instance=str(request.url),
                     )
                 )
+        if app.state.authz is not None and not app.state.authz.can_list_process(
+            await _get_auth(request), process_id
+        ):
+            raise OGCProcessException(
+                OGCExceptionResponse(
+                    type="about:blank",
+                    title="Not Found",
+                    status=404,
+                    detail=f"Process '{process_id}' not found",
+                    instance=str(request.url),
+                )
+            )
         return await app.state.process_port.get_process(process_id)
 
     @api_router.get("/jobs", response_model=JobList, response_model_exclude_none=True)
@@ -502,6 +532,14 @@ def create_app(
         )
         for ver in getattr(app_settings, "UMP_MCP_CATALOG_VERSIONS", ["1"]):
             app.include_router(mcp_router, prefix=f"/mcp/v{ver}")
+
+    # Model registry API — its own version namespace, outside the OGC prefixes:
+    # the OGC API Processes endpoints are not changed by the registry
+    # (reports/REF-F12-model-registry.md, "API sketch").
+    if registry is not None:
+        registry_router = create_registry_router(get_auth=_get_auth, services=registry)
+        for ver in app_settings.UMP_REGISTRY_API_VERSIONS:
+            app.include_router(registry_router, prefix=f"/registry/v{ver}")
 
     # Dedicated route for the landing CSS. This is a robust fallback for environments
     # where StaticFiles mounting might not be available (packaged apps, different cwd).

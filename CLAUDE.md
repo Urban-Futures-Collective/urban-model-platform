@@ -112,6 +112,21 @@ Jobs carry a local UUID; remote self/results links are rewritten to local ones
   (NoAuth/BasicAuth/ApiKey/BearerToken), and the explicit allowlist of exposed processes with
   per-process `anonymous-access`, `ttw-job-done`, `poll-interval`, `result-storage`, `deterministic`.
   Only listed processes are exposed. The file is hot-reloaded by a watcher in `ProviderConfigFileAdapter`.
+- `UMP_PROVIDERS_SOURCE=file|db` (default `file`) picks the `ProvidersPort` adapter in `asgi.py`.
+  `db` reads the model registry (schema `registry`, migration 0003) through
+  `ProviderConfigDbAdapter`: an in-memory snapshot refreshed via Postgres LISTEN/NOTIFY.
+  Model-server credentials are stored Fernet-encrypted (`UMP_REGISTRY_CREDENTIALS_KEY`);
+  There is no providers.yaml import; `scripts/seed_registry_dev.sql` seeds the mock server for local
+  `db` mode (run it after `ump-migrate upgrade head`).
+  Both adapters share the lookup rules in `core/models/providers_config.py::ProvidersSnapshot`.
+- The model registry has its own REST API at `/registry/v1/…` (`adapters/web/registry_router.py`,
+  core services `core/services/registry_*.py`), mounted outside the OGC version loop. **The OGC
+  `/v1.0/*` contract must not change**: `tests/test_ogc_contract_unchanged.py` pins it to
+  `tests/fixtures/ogc_openapi_v1.0.json`. Registry changes reach OGC only via the providers snapshot.
+  Registry writes pass an `AuditEvent` to the repository method, which stores change and audit row in
+  one transaction; PATCH needs `If-Match`. User-supplied URLs are fetched only through `SafeFetchPort`
+  (address checks at connect time) — never through `HttpClientPort`.
+  The review workflow (status graph, four-eyes) is pure core logic in `core/models/registry/workflow.py`.
 - Inbound auth is JWT/JWKS (`JwtAuthAdapter`), off by default (`UMP_AUTH_ENABLED=false`).
   Authorization is role-based and lives in `core/services/authorization.py`: role `{provider}` grants the
   whole provider, `{provider}:{process}` a single process, and `anonymous-access: true` bypasses auth.

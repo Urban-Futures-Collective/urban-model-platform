@@ -15,6 +15,8 @@ gets its own adapter instances (file watchers, HTTP clients, DB connections).
 
 import os
 
+from sqlalchemy.ext.asyncio import create_async_engine
+
 from ump.adapters.aiohttp_client_adapter import AioHttpClientAdapter
 from ump.adapters.colon_process_id_validator import ColonProcessId
 from ump.adapters.job_repository_inmemory import InMemoryJobRepository
@@ -24,10 +26,15 @@ from ump.adapters.poll_lock_noop import NoOpPollLock
 from ump.adapters.provider_config_file_adapter import ProviderConfigFileAdapter
 from ump.adapters.remote_auth_adapter import RemoteAuthAdapter
 from ump.adapters.retry_tenacity import TenacityRetryAdapter
+from ump.adapters.safe_fetch_aiohttp import AioHttpSafeFetch
 from ump.adapters.site_info_static_adapter import StaticSiteInfoAdapter
 from ump.adapters.web.fastapi import create_app
+from ump.adapters.web.registry_router import RegistryServices
 from ump.core.config import JobManagerConfig
+from ump.core.interfaces.credential_cipher import CredentialCipherPort
 from ump.core.interfaces.job_repository import JobRepositoryPort
+from ump.core.interfaces.model_registry import ModelRegistryPort
+from ump.core.interfaces.providers import ProvidersPort
 from ump.core.logging_config import configure_logging
 from ump.core.managers.job_manager import JobManager
 from ump.core.managers.observers import (
@@ -79,6 +86,16 @@ def construct_database_url() -> str:
         f"@{host}:{port}/{name}"
     )
 
+def build_credential_cipher() -> CredentialCipherPort | None:
+    """Cipher for model-server credentials in the registry, if a key is set."""
+    key = app_settings.UMP_REGISTRY_CREDENTIALS_KEY
+    if key is None:
+        return None
+    from ump.adapters.credential_cipher_fernet import FernetCredentialCipher
+
+    return FernetCredentialCipher(key.get_secret_value().split(","))
+
+
 def _process_manager_factory(client):
     return ProcessManager(
         providers_port,
@@ -127,11 +144,32 @@ def _job_manager_factory(client, process_manager):
 # Infrastructure adapters (one set per worker process)
 # ---------------------------------------------------------------------------
 
-_config_path = os.path.abspath(
-    app_settings.UMP_PROVIDERS_FILE
+# One engine (connection pool) per worker, shared by every database adapter.
+_needs_database = (
+    app_settings.UMP_JOB_STORE == "postgres" or app_settings.UMP_PROVIDERS_SOURCE == "db"
 )
-providers_port = ProviderConfigFileAdapter(_config_path)
-providers_port.start_file_watcher()
+engine = create_async_engine(construct_database_url()) if _needs_database else None
+
+# Async context managers the web lifespan keeps running while the app serves.
+lifecycle: list = []
+
+# Encrypts model-server credentials in the registry (None: no key configured).
+credential_cipher = build_credential_cipher()
+
+providers_port: ProvidersPort
+if app_settings.UMP_PROVIDERS_SOURCE == "db":
+    from ump.adapters.provider_config_db_adapter import ProviderConfigDbAdapter
+
+    providers_port = ProviderConfigDbAdapter(
+        engine,
+        cipher=credential_cipher,
+        poll_interval=app_settings.UMP_PROVIDERS_DB_POLL_INTERVAL,
+    )
+    lifecycle.append(providers_port)
+else:
+    _config_path = os.path.abspath(app_settings.UMP_PROVIDERS_FILE)
+    providers_port = ProviderConfigFileAdapter(_config_path)
+    providers_port.start_file_watcher()
 
 http_client = AioHttpClientAdapter()
 process_id_validator = ColonProcessId()
@@ -143,9 +181,7 @@ if app_settings.UMP_JOB_STORE == "postgres":
     from ump.adapters.job_repository_sql import SQLModelJobRepository
     from ump.adapters.poll_lock_pg import PgAdvisoryPollLock
 
-    database_url = construct_database_url()
-
-    _sql_repo = SQLModelJobRepository(database_url)
+    _sql_repo = SQLModelJobRepository(engine=engine)
     job_repo: JobRepositoryPort = _sql_repo
     poll_lock = PgAdvisoryPollLock(_sql_repo._session_factory)
 else:
@@ -157,6 +193,37 @@ else:
 # ---------------------------------------------------------------------------
 
 
+# Model registry: SQL when a database is configured, else in memory (dev only).
+if engine is not None:
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from ump.adapters.registry_repository_sql import SQLModelRegistryRepository
+
+    registry_repo: ModelRegistryPort = SQLModelRegistryRepository(
+        async_sessionmaker(engine, expire_on_commit=False)
+    )
+else:
+    from ump.adapters.registry_repository_inmemory import InMemoryRegistryRepository
+
+    registry_repo = InMemoryRegistryRepository()
+
+registry_services = RegistryServices.create(
+    registry_repo,
+    authorization=authorization_service,
+    providers=providers_port,
+    fetch=AioHttpSafeFetch(
+        allow_http=app_settings.UMP_REGISTRY_ALLOW_HTTP,
+        allowed_private_hosts=app_settings.UMP_REGISTRY_ALLOWED_PRIVATE_HOSTS,
+        timeout=app_settings.UMP_REGISTRY_FETCH_TIMEOUT,
+        max_bytes=app_settings.UMP_REGISTRY_FETCH_MAX_BYTES,
+    ),
+    remote_auth=remote_auth,
+    cipher=credential_cipher,
+    languages=app_settings.UMP_REGISTRY_LANGUAGES,
+    public_catalogue=app_settings.UMP_PUBLIC_PROCESSES,
+    jobs=job_repo,
+)
+
 app = create_app(
     process_manager_factory=_process_manager_factory,
     http_client=http_client,
@@ -167,4 +234,6 @@ app = create_app(
     authorization_service=authorization_service,
     site_info=StaticSiteInfoAdapter(),
     tool_catalog_factory=_tool_catalog_factory,
+    lifecycle=lifecycle,
+    registry=registry_services,
 )

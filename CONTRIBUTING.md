@@ -26,7 +26,7 @@ Install with pip:
 ```bash
 python3 -m pip install --user pipx
 pipx install poetry
-pipx install copier copier-templates-extensions
+pipx install copier copier-template-extensions
 ```
 
 Or create a new environment with conda/mamba:
@@ -80,7 +80,7 @@ git submodule init
 git submodule update --recursive
 ```
 
-In this folder you can find build instructions to build a container with OGC API Processes compliant example processes based on pygeoapi. Those can be utilized as example processes for the Urban Model Platform. For it to run, `cd moduleserver_example`and run:
+In this folder you can find build instructions to build a container with OGC API Processes compliant example processes based on pygeoapi. Those can be utilized as example processes for the Urban Model Platform. For it to run, `cd modelserver_example`and run:
 - `cp .env.example .env` and set `IMAGE_TAG` to `main`
 -  `docker compose -f docker-compose-build.yaml build`
 
