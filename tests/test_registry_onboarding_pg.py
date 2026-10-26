@@ -1,8 +1,10 @@
-"""Onboarding end to end on the real adapters: SQL registry (PostgreSQL), real
+"""Registry end to end on the real adapters: SQL registry (PostgreSQL), real
 AioHttpSafeFetch against a live local OGC server, Fernet cipher, router.
 
-Flow: register server → discover → create drafts → edit card, then check the
-rows and the audit log in the database. Runs only with UMP_TEST_DATABASE_URL.
+Flow: register server → discover → create drafts → edit card → submit →
+review → verify (with a real job) → publish, then check the rows, the audit
+log and the provider view in the database — so every write is checked against
+the 0003 CHECK constraints. Runs only with UMP_TEST_DATABASE_URL.
 """
 
 import asyncio
@@ -30,6 +32,7 @@ from ump.adapters.web.fastapi import create_app
 from ump.adapters.web.registry_router import RegistryServices
 from ump.core.interfaces.auth import AuthContext, AuthPort
 from ump.core.managers.process_manager import ProcessManager
+from ump.core.models.job import Job
 from ump.core.services.authorization import AuthorizationService
 
 DB_URL = os.environ.get("UMP_TEST_DATABASE_URL")
@@ -37,12 +40,15 @@ pytestmark = pytest.mark.skipif(
     not DB_URL, reason="UMP_TEST_DATABASE_URL not set (needs PostgreSQL)"
 )
 REPO_ROOT = Path(__file__).resolve().parents[1]
-OWNER = AuthContext("owner-1", ["provider"], True, name="Olga")
+CALLERS = {
+    "owner": AuthContext("owner-1", ["provider"], True, name="Olga"),
+    "verifier": AuthContext("ver-1", ["verifier"], True),
+}
 
 
-class OwnerAuth(AuthPort):
+class TokenAuth(AuthPort):
     async def verify(self, token):
-        return OWNER if token else AuthContext(None, [], False)
+        return CALLERS[token] if token else AuthContext(None, [], False)
 
 
 @contextmanager
@@ -124,6 +130,7 @@ def test_onboarding_flow_on_real_adapters(database):
         "registry.audit_log"
     )
     engine = create_async_engine(DB_URL)
+    jobs = InMemoryJobRepository("scratch/test_registry_onboarding_pg_jobs")
     repo = SQLModelRegistryRepository(
         async_sessionmaker(engine, expire_on_commit=False)
     )
@@ -153,7 +160,7 @@ def test_onboarding_flow_on_real_adapters(database):
         job_manager_factory=lambda c, pm: _StubJobManager(),
         job_repo=InMemoryJobRepository("scratch/test_registry_onboarding_pg"),
         process_id_validator=validator,
-        auth_port=OwnerAuth(),
+        auth_port=TokenAuth(),
         authorization_service=authz,
         registry=RegistryServices.create(
             repo,
@@ -166,9 +173,11 @@ def test_onboarding_flow_on_real_adapters(database):
             cipher=FernetCredentialCipher([Fernet.generate_key().decode()]),
             languages=["de", "en"],
             public_catalogue=False,
+            jobs=jobs,
         ),
     )
     headers = {"Authorization": "Bearer owner"}
+    reviewer = {"Authorization": "Bearer verifier"}
     try:
         with ogc_server() as base, TestClient(app) as client:
             created = client.post(
@@ -205,21 +214,57 @@ def test_onboarding_flow_on_real_adapters(database):
             )
             assert edited.status_code == 200, edited.text
             assert edited.json()["full_name"] == {"de": "Echo (de)", "en": "Echo"}
+
+            # phase C: review workflow on the real database (CHECKs apply)
+            def step(who, to, **extra):
+                r = client.post(
+                    f"/registry/v1/models/{model_id}/transitions",
+                    headers=who,
+                    json={"to_status": to, **extra},
+                )
+                assert r.status_code == 200, r.text
+                return r
+
+            step(headers, "submitted")
+            step(reviewer, "in_review")
+            asyncio.run(
+                jobs.create(
+                    Job(
+                        id="verify-1",
+                        user_id="ver-1",
+                        process_id="echo-srv:echo",
+                        provider="echo-srv",
+                        status="successful",
+                    )
+                )
+            )
+            step(reviewer, "verified", verification_job_id="verify-1")
+            step(reviewer, "published")
     finally:
         asyncio.run(engine.dispose())
 
     (model,) = _sql(
-        "SELECT status, license, owner_sub, current_interface_sha256 "
+        "SELECT status, exec_state, license, owner_sub, verified_by, "
+        "verified_interface_sha256, current_interface_sha256, published_at "
         "FROM registry.model"
     )
-    assert model.status == "draft" and model.license == "MIT"
-    assert model.owner_sub == "owner-1" and len(model.current_interface_sha256) == 64
+    assert model.status == "published" and model.exec_state == "published"
+    assert model.license == "MIT" and model.owner_sub == "owner-1"
+    assert model.verified_by == "ver-1" and model.published_at is not None
+    assert model.verified_interface_sha256 == model.current_interface_sha256
+    # what the OGC side reads now contains the published model
+    (row,) = _sql("SELECT name, processes FROM registry.v_providers_config")
+    assert row.name == "echo-srv" and row.processes[0]["state"] == "published"
     actions = [r[0] for r in _sql("SELECT action FROM registry.audit_log ORDER BY id")]
     assert actions == [
         "server.create",
         "server.discover",
         "model.create",
         "model.card.update",
+        "model.status.change",
+        "model.status.change",
+        "model.status.change",
+        "model.status.change",
     ]
     (user,) = _sql("SELECT display_name FROM registry.app_user WHERE sub = 'owner-1'")
     assert user.display_name == "Olga"

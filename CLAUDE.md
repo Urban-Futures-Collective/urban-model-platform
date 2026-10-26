@@ -126,6 +126,7 @@ Jobs carry a local UUID; remote self/results links are rewritten to local ones
   Registry writes pass an `AuditEvent` to the repository method, which stores change and audit row in
   one transaction; PATCH needs `If-Match`. User-supplied URLs are fetched only through `SafeFetchPort`
   (address checks at connect time) — never through `HttpClientPort`.
+  The review workflow (status graph, four-eyes) is pure core logic in `core/models/registry/workflow.py`.
 - Inbound auth is JWT/JWKS (`JwtAuthAdapter`), off by default (`UMP_AUTH_ENABLED=false`).
   Authorization is role-based and lives in `core/services/authorization.py`: role `{provider}` grants the
   whole provider, `{provider}:{process}` a single process, and `anonymous-access: true` bypasses auth.

@@ -182,6 +182,7 @@ def _setup(with_cipher: bool = True, auth: bool = True):
             cipher=cipher,
             languages=["de", "en"],
             public_catalogue=True,
+            jobs=InMemoryJobRepository("scratch/test_registry_jobs"),
         ),
     )
     return TestClient(app), repo, fetch, providers, cipher

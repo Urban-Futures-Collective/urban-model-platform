@@ -221,6 +221,7 @@ registry_services = RegistryServices.create(
     cipher=credential_cipher,
     languages=app_settings.UMP_REGISTRY_LANGUAGES,
     public_catalogue=app_settings.UMP_PUBLIC_PROCESSES,
+    jobs=job_repo,
 )
 
 app = create_app(
