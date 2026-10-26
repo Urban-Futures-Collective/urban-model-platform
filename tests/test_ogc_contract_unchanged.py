@@ -60,17 +60,19 @@ def _app(with_registry: bool):
         from ump.adapters.registry_repository_inmemory import (
             InMemoryRegistryRepository,
         )
+        from ump.adapters.remote_auth_adapter import RemoteAuthAdapter
+        from ump.adapters.safe_fetch_aiohttp import AioHttpSafeFetch
         from ump.adapters.web.registry_router import RegistryServices
-        from ump.core.services.registry_accounts import RegistryAccountService
-        from ump.core.services.registry_catalog import RegistryCatalogService
-        from ump.core.services.registry_servers import RegistryServerService
 
-        repo = InMemoryRegistryRepository()
-        authz = AuthorizationService(None)  # type: ignore[arg-type]
-        kwargs["registry"] = RegistryServices(
-            catalog=RegistryCatalogService(repo, authz, public_catalogue=False),
-            servers=RegistryServerService(repo, authz),
-            accounts=RegistryAccountService(repo),
+        kwargs["registry"] = RegistryServices.create(
+            InMemoryRegistryRepository(),
+            authorization=AuthorizationService(None),  # type: ignore[arg-type]
+            providers=None,  # type: ignore[arg-type]
+            fetch=AioHttpSafeFetch(),
+            remote_auth=RemoteAuthAdapter(),
+            cipher=None,
+            languages=["de", "en"],
+            public_catalogue=False,
         )
     # openapi() never runs the lifespan, so the factories are never called
     return create_app(

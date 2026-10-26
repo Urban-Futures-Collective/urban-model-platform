@@ -660,7 +660,47 @@ language, JSONB type checks, provider view, audit guard and retention delete). T
   schemas) to a snapshot generated from commit 511a7e9, i.e. before the registry work.
 - Without a database the registry uses the in-memory repository (dev only).
 
-Not yet: phases B–E of the registry API, drift checks, retention.
+**Registry API phase B is implemented** (branch `v3.0.0alpha/registry-api-phase-b`):
+`POST /servers`, `PATCH /servers/{id}`, `POST /servers/{id}/discover`,
+`POST /servers/{id}/models`, `PATCH /models/{id}`.
+
+- Services `RegistryOnboardingService` (servers, discovery, drafts) and `RegistryCardService`
+  (card edits); input models and JSONB shapes in `core/models/registry/card.py` (language maps
+  restricted to `UMP_REGISTRY_LANGUAGES`, no empty texts, SPDX licence, contributor roles, …).
+- **Audit:** services build an `AuditEvent` (actor, role snapshot, request id from the
+  correlation id, details without secrets, before/after diff for card edits) and pass it to
+  the repository write, which stores both in one transaction — tested against Postgres for
+  success, unique conflicts, stale updates and all-or-nothing batches.
+- **Concurrency:** `ETag` on `GET`/`PATCH` of servers and models, derived from `updated_at`;
+  `PATCH` needs `If-Match` (428 without, 412 if stale; `*` is not accepted). Repositories
+  update conditionally on `updated_at`.
+- **Credentials:** encrypted before the repository; `authentication: null` switches to NoAuth
+  and deletes the secret; 503 if `UMP_REGISTRY_CREDENTIALS_KEY` is missing.
+- **Outbound safety — deviation from "no new outbound HTTP port":** discovery uses a new
+  `SafeFetchPort` (`adapters/safe_fetch_aiohttp.py`). The checks must run when connecting —
+  a resolver wrapper drops non-public addresses, so a DNS answer cannot change between check
+  and use — and the execution client (`HttpClientPort`) follows redirects and has no size cap.
+  Settings: `UMP_REGISTRY_ALLOW_HTTP`, `UMP_REGISTRY_ALLOWED_PRIVATE_HOSTS`,
+  `UMP_REGISTRY_FETCH_TIMEOUT`, `UMP_REGISTRY_FETCH_MAX_BYTES`.
+- **Drafts:** pre-filled from the raw description (title → `full_name`, description,
+  keywords, version, interface hash in `current_interface_sha256`); a translation is stored
+  only if the server answers `Accept-Language` differently. Slug collisions get `-2`, `-3`, …
+  Existing models are reported, not duplicated.
+- **Card rules:** owner only (`provider` role); 403 if the caller can see the model, else 404;
+  no edits while `deactivated`; the 0003 invariants are checked first with readable errors.
+  **`process_config` (execution settings such as `anonymous-access`) is editable only in
+  `draft` and `changes_requested`** — it changes who may run the model, so on a model in
+  review or published it must go through review. (Decision taken in implementation; revisit
+  with open question 3.)
+- Writes that can change the provider snapshot call `ProvidersPort.load_providers()`.
+- Writes need an authenticated caller, so `UMP_AUTH_ENABLED=false` rejects them (401).
+
+Known limitation: the execution path (`HttpClientPort`) is not address-checked, so a server
+whose DNS later points at an internal address would be reached by forwarded executions. The
+drift check (phase D) re-validates `base_url` periodically; pinning execution traffic would
+need the guarded resolver in `AioHttpClientAdapter` too.
+
+Not yet: phases C–E of the registry API, drift checks, retention.
 
 ## Implementation phases
 

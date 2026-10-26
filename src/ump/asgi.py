@@ -26,6 +26,7 @@ from ump.adapters.poll_lock_noop import NoOpPollLock
 from ump.adapters.provider_config_file_adapter import ProviderConfigFileAdapter
 from ump.adapters.remote_auth_adapter import RemoteAuthAdapter
 from ump.adapters.retry_tenacity import TenacityRetryAdapter
+from ump.adapters.safe_fetch_aiohttp import AioHttpSafeFetch
 from ump.adapters.site_info_static_adapter import StaticSiteInfoAdapter
 from ump.adapters.web.fastapi import create_app
 from ump.adapters.web.registry_router import RegistryServices
@@ -43,9 +44,6 @@ from ump.core.managers.observers import (
 )
 from ump.core.managers.process_manager import ProcessManager
 from ump.core.services.authorization import AuthorizationService
-from ump.core.services.registry_accounts import RegistryAccountService
-from ump.core.services.registry_catalog import RegistryCatalogService
-from ump.core.services.registry_servers import RegistryServerService
 from ump.core.services.tool_catalog import ToolCatalogService
 from ump.core.settings import app_settings, set_logger
 
@@ -155,13 +153,16 @@ engine = create_async_engine(construct_database_url()) if _needs_database else N
 # Async context managers the web lifespan keeps running while the app serves.
 lifecycle: list = []
 
+# Encrypts model-server credentials in the registry (None: no key configured).
+credential_cipher = build_credential_cipher()
+
 providers_port: ProvidersPort
 if app_settings.UMP_PROVIDERS_SOURCE == "db":
     from ump.adapters.provider_config_db_adapter import ProviderConfigDbAdapter
 
     providers_port = ProviderConfigDbAdapter(
         engine,
-        cipher=build_credential_cipher(),
+        cipher=credential_cipher,
         poll_interval=app_settings.UMP_PROVIDERS_DB_POLL_INTERVAL,
     )
     lifecycle.append(providers_port)
@@ -206,14 +207,20 @@ else:
 
     registry_repo = InMemoryRegistryRepository()
 
-registry_services = RegistryServices(
-    catalog=RegistryCatalogService(
-        registry_repo,
-        authorization_service,
-        public_catalogue=app_settings.UMP_PUBLIC_PROCESSES,
+registry_services = RegistryServices.create(
+    registry_repo,
+    authorization=authorization_service,
+    providers=providers_port,
+    fetch=AioHttpSafeFetch(
+        allow_http=app_settings.UMP_REGISTRY_ALLOW_HTTP,
+        allowed_private_hosts=app_settings.UMP_REGISTRY_ALLOWED_PRIVATE_HOSTS,
+        timeout=app_settings.UMP_REGISTRY_FETCH_TIMEOUT,
+        max_bytes=app_settings.UMP_REGISTRY_FETCH_MAX_BYTES,
     ),
-    servers=RegistryServerService(registry_repo, authorization_service),
-    accounts=RegistryAccountService(registry_repo),
+    remote_auth=remote_auth,
+    cipher=credential_cipher,
+    languages=app_settings.UMP_REGISTRY_LANGUAGES,
+    public_catalogue=app_settings.UMP_PUBLIC_PROCESSES,
 )
 
 app = create_app(
