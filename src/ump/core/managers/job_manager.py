@@ -41,6 +41,8 @@ from ump.core.settings import logger
 from ump.core.utils.api_paths import api_base
 
 REQUIRED_STATUS_FIELDS = {"jobID", "status", "type"}
+# Accept header for fetching results from a provider: JSON first, anything else allowed.
+RESULTS_ACCEPT = "application/json, */*;q=0.1"
 
 
 # -------------------------------------------
@@ -1078,6 +1080,9 @@ class JobManager:
             if self._remote_auth
             else {}
         )
+        # Without an Accept header pygeoapi renders JSON results as an HTML page.
+        # Other result types (e.g. application/geo+json, images) come back as they are.
+        request_headers = {**(auth_headers or {}), "Accept": RESULTS_ACCEPT}
         logger.debug(
             f"[job:results] proxy fetch results_url={results_url} job_id={job.id}"
         )
@@ -1086,7 +1091,7 @@ class JobManager:
                 body_bytes, content_type = await self._retry.execute(
                     self._fetch_results_once,
                     results_url,
-                    auth_headers or None,
+                    request_headers,
                     job,
                     attempts=self.config.results_fetch_max_retries,
                     wait_initial=self.config.results_fetch_retry_base_wait,
@@ -1095,7 +1100,7 @@ class JobManager:
                 )
             else:
                 body_bytes, content_type = await self._fetch_results_once(
-                    results_url, auth_headers or None, job
+                    results_url, request_headers, job
                 )
             return {
                 "status": 200,
