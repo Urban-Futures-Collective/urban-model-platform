@@ -72,3 +72,42 @@ async def test_filters_compose_with_process_id():
     await _seed(repo)
     jobs = await repo.list(user_id="alice", process_id="infra:square")
     assert _ids(jobs) == {"alice-2"}
+
+
+# ---------------------------------------------------------------------------
+# Process catalog visibility (added with the per-caller filtering change)
+# ---------------------------------------------------------------------------
+
+
+def test_catalog_filtering_matches_execution_policy():
+    """The catalog must show exactly what the caller is allowed to execute.
+
+    Before this, GET /processes was an all-or-nothing gate on
+    UMP_PUBLIC_PROCESSES: it 401'd anonymous callers even when processes were
+    marked anonymous-access, and showed every process to anyone who got past
+    it. Both halves contradicted the documented meaning of the setting.
+    """
+    from ump.core.interfaces.auth import AuthContext
+    from ump.core.models.providers_config import ProviderConfig
+    from ump.core.services.authorization import AuthorizationService
+
+    class _Providers:
+        def get_provider(self, name):
+            return ProviderConfig.model_validate(
+                {
+                    "name": "p",
+                    "url": "http://example.org/",
+                    "processes": [
+                        {"id": "open", "anonymous-access": True},
+                        {"id": "closed"},
+                    ],
+                }
+            )
+
+    authz = AuthorizationService(_Providers())
+    anon = AuthContext(user_id=None, roles=[], is_authenticated=False)
+    holder = AuthContext(user_id="u", roles=["p:closed"], is_authenticated=True)
+
+    assert authz.can_access_process(anon, "p:open") is True
+    assert authz.can_access_process(anon, "p:closed") is False
+    assert authz.can_access_process(holder, "p:closed") is True

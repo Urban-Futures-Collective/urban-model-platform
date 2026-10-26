@@ -2,6 +2,7 @@ from typing import List
 from urllib.parse import urlparse
 from ump.core.models.link import Link
 from ump.core.settings import app_settings
+from ump.core.utils.api_paths import api_base
 
 
 def rewrite_links_to_local(process_id: str, links: List[Link]) -> List[Link]:
@@ -29,7 +30,7 @@ def rewrite_links_to_local(process_id: str, links: List[Link]) -> List[Link]:
             continue
 
         # Replace external link with a local reference to the process
-        new_href = f"{app_settings.UMP_API_SERVER_URL_PREFIX.rstrip('/')}/processes/{process_id}"
+        new_href = f"{api_base()}/processes/{process_id}"
         rewritten.append(Link(**{**link.model_dump(), "href": new_href}))
 
     return rewritten

@@ -1,5 +1,6 @@
 from ump.core.interfaces.site_info import SiteInfoPort
 from ump.core.settings import app_settings
+from ump.core.utils.api_paths import external_base
 
 
 class StaticSiteInfoAdapter(SiteInfoPort):
@@ -21,16 +22,20 @@ class StaticSiteInfoAdapter(SiteInfoPort):
                     "description": f"List submitted jobs (v{ver})",
                 }
             )
-            # link to OpenAPI definition for the versioned API
-            routes.append(
-                {
-                    "path": f"{prefix}/openapi.json",
-                    "description": f"OpenAPI definition (v{ver})",
-                }
-            )
+
+        # OpenAPI and the docs UI are served by FastAPI at the application root,
+        # not under a version prefix, so they take the external base only.
+        routes.append(
+            {
+                "path": f"{external_base()}/openapi.json",
+                "description": "OpenAPI definition",
+            }
+        )
 
         return {
             "title": app_settings.UMP_SITE_TITLE,
+            "openapi_url": f"{external_base()}/openapi.json",
+            "docs_url": f"{external_base()}/docs",
             "description": app_settings.UMP_SITE_DESCRIPTION,
             "contact": app_settings.UMP_SITE_CONTACT,
             "routes": routes,
