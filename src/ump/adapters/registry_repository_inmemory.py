@@ -4,7 +4,9 @@ Enforces the uniqueness rules of migration 0003 (server name, model slug,
 server + remote process) and the optimistic-concurrency rule of the port, so
 tests see the same conflicts as the database. Fills the timestamps the
 database would set, and keeps the audit events in ``audit`` (written together
-with the change, or not at all — like the SQL transaction).
+with the change, or not at all — like the SQL transaction). Given an
+``InMemoryAuditLog`` (injected by the composition root), it also appends them
+there, so the audit API sees registry changes like it does with a database.
 """
 
 from __future__ import annotations
@@ -13,7 +15,9 @@ from datetime import datetime, timedelta, timezone
 from typing import Callable
 from uuid import UUID
 
+from ump.adapters.audit_log_inmemory import InMemoryAuditLog
 from ump.core.interfaces.model_registry import (
+    InterfaceCheck,
     ModelQuery,
     ModelRegistryPort,
     RegistryConflictError,
@@ -25,9 +29,12 @@ from ump.core.models.registry.audit import AuditEvent
 
 class InMemoryRegistryRepository(ModelRegistryPort):
     def __init__(
-        self, clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc)
+        self,
+        clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
+        audit_log: InMemoryAuditLog | None = None,
     ) -> None:
         self._clock = clock
+        self._audit_log = audit_log
         self.users: dict[str, AppUser] = {}
         self.servers: dict[str, ProviderServer] = {}
         self.models: dict[tuple[UUID, str], RegistryModel] = {}
@@ -42,6 +49,12 @@ class InMemoryRegistryRepository(ModelRegistryPort):
             now = last + timedelta(microseconds=1)
         self._last_now = now
         return now
+
+    async def _record(self, events: list[AuditEvent]) -> None:
+        self.audit.extend(events)
+        if self._audit_log is not None:
+            for event in events:
+                await self._audit_log.append(event)
 
     # --- accounts ---------------------------------------------------------
 
@@ -96,7 +109,7 @@ class InMemoryRegistryRepository(ModelRegistryPort):
         now = self._now()
         stored = server.model_copy(update={"created_at": now, "updated_at": now})
         self.servers[server.name] = stored
-        self.audit.append(audit)
+        await self._record([audit])
         return stored.model_copy()
 
     async def update_provider_server(
@@ -113,7 +126,7 @@ class InMemoryRegistryRepository(ModelRegistryPort):
             }
         )
         self.servers[current.name] = stored
-        self.audit.append(audit)
+        await self._record([audit])
         return stored.model_copy()
 
     # --- models -----------------------------------------------------------
@@ -168,7 +181,7 @@ class InMemoryRegistryRepository(ModelRegistryPort):
             row = model.model_copy(update={"created_at": now, "updated_at": now})
             self.models[(model.provider_server_id, model.remote_process_id)] = row
             stored.append(row.model_copy())
-        self.audit.extend(audit)
+        await self._record(audit)
         return stored
 
     async def update_model(
@@ -186,5 +199,31 @@ class InMemoryRegistryRepository(ModelRegistryPort):
             }
         )
         self.models[(current.provider_server_id, current.remote_process_id)] = stored
-        self.audit.append(audit)
+        await self._record([audit])
         return stored.model_copy()
+
+    async def record_interface_checks(
+        self, checks: list[InterfaceCheck], *, audit: list[AuditEvent] = ()
+    ) -> set[UUID]:
+        applied: set[UUID] = set()
+        events = list(audit)
+        for check in checks:
+            current = await self.get_model_by_id(check.model_id)
+            if (
+                current is None
+                or current.verified_interface_sha256 != check.expected_verified_sha256
+            ):
+                continue
+            key = (current.provider_server_id, current.remote_process_id)
+            self.models[key] = current.model_copy(
+                update={
+                    "interface_state": check.interface_state,
+                    "current_interface_sha256": check.current_interface_sha256,
+                    "last_checked_at": check.last_checked_at,
+                }
+            )  # updated_at unchanged
+            applied.add(check.model_id)
+            if check.audit is not None:
+                events.append(check.audit)
+        await self._record(events)
+        return applied

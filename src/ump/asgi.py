@@ -31,19 +31,23 @@ from ump.adapters.site_info_static_adapter import StaticSiteInfoAdapter
 from ump.adapters.web.fastapi import create_app
 from ump.adapters.web.registry_router import RegistryServices
 from ump.core.config import JobManagerConfig
+from ump.core.interfaces.audit_log import AuditLogPort
 from ump.core.interfaces.credential_cipher import CredentialCipherPort
 from ump.core.interfaces.job_repository import JobRepositoryPort
 from ump.core.interfaces.model_registry import ModelRegistryPort
+from ump.core.interfaces.poll_lock import PollLockPort
 from ump.core.interfaces.providers import ProvidersPort
 from ump.core.logging_config import configure_logging
 from ump.core.managers.job_manager import JobManager
 from ump.core.managers.observers import (
+    AuditObserver,
     PollingSchedulerObserver,
     ResultsVerificationObserver,
     StatusHistoryObserver,
 )
 from ump.core.managers.process_manager import ProcessManager
 from ump.core.services.authorization import AuthorizationService
+from ump.core.services.interface_drift import InterfaceCheckScheduler
 from ump.core.services.tool_catalog import ToolCatalogService
 from ump.core.settings import app_settings, set_logger
 
@@ -136,6 +140,7 @@ def _job_manager_factory(client, process_manager):
         StatusHistoryObserver(repository=job_repo),
         PollingSchedulerObserver(schedule_callback=jm._schedule_poll),
         ResultsVerificationObserver(http_client=client),
+        AuditObserver(audit_log=audit_log),
     ]
     process_manager.attach_job_manager(jm)
     return jm
@@ -193,19 +198,29 @@ else:
 # ---------------------------------------------------------------------------
 
 
-# Model registry: SQL when a database is configured, else in memory (dev only).
+# Model registry and audit log: SQL when a database is configured, else in
+# memory (dev only).
+drift_lock: PollLockPort
 if engine is not None:
     from sqlalchemy.ext.asyncio import async_sessionmaker
 
+    from ump.adapters.audit_log_sql import SQLAuditLog
+    from ump.adapters.poll_lock_pg import PgAdvisoryPollLock
     from ump.adapters.registry_repository_sql import SQLModelRegistryRepository
 
-    registry_repo: ModelRegistryPort = SQLModelRegistryRepository(
-        async_sessionmaker(engine, expire_on_commit=False)
-    )
+    _registry_sessions = async_sessionmaker(engine, expire_on_commit=False)
+    registry_repo: ModelRegistryPort = SQLModelRegistryRepository(_registry_sessions)
+    audit_log: AuditLogPort = SQLAuditLog(_registry_sessions)
+    # one worker runs the drift check, whatever the job store
+    drift_lock = PgAdvisoryPollLock(_registry_sessions)
 else:
+    from ump.adapters.audit_log_inmemory import InMemoryAuditLog
     from ump.adapters.registry_repository_inmemory import InMemoryRegistryRepository
 
-    registry_repo = InMemoryRegistryRepository()
+    _memory_audit = InMemoryAuditLog()
+    audit_log = _memory_audit
+    registry_repo = InMemoryRegistryRepository(audit_log=_memory_audit)
+    drift_lock = NoOpPollLock()
 
 registry_services = RegistryServices.create(
     registry_repo,
@@ -222,7 +237,17 @@ registry_services = RegistryServices.create(
     languages=app_settings.UMP_REGISTRY_LANGUAGES,
     public_catalogue=app_settings.UMP_PUBLIC_PROCESSES,
     jobs=job_repo,
+    audit_log=audit_log,
 )
+
+if app_settings.UMP_INTERFACE_CHECK_INTERVAL_SECONDS > 0:
+    lifecycle.append(
+        InterfaceCheckScheduler(
+            registry_services.drift,
+            lock=drift_lock,
+            interval=app_settings.UMP_INTERFACE_CHECK_INTERVAL_SECONDS,
+        )
+    )
 
 app = create_app(
     process_manager_factory=_process_manager_factory,

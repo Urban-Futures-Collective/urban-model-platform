@@ -10,8 +10,9 @@ database defaults (timestamps) are left out of INSERTs when the domain value is
 None, and every write returns the stored row.
 
 Every write and its audit row run in one transaction. Updates are conditional
-on ``updated_at`` (optimistic concurrency) and set it to ``now()``. A unique
-violation becomes ``RegistryConflictError``.
+on ``updated_at`` (optimistic concurrency) and set it to ``now()`` — except
+drift-check results, which are conditional on the verified hash and leave
+``updated_at`` alone. A unique violation becomes ``RegistryConflictError``.
 
 The session factory is injected by the composition root.
 """
@@ -22,13 +23,15 @@ from datetime import datetime
 from typing import Any, Optional
 from uuid import UUID
 
-from sqlalchemy import Column, DateTime, LargeBinary, Text, func, or_, update
-from sqlalchemy.dialects.postgresql import ARRAY, JSONB, insert
+from sqlalchemy import Column, DateTime, LargeBinary, func, or_, update
+from sqlalchemy.dialects.postgresql import JSONB, insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlmodel import Field, SQLModel, select
 
+from ump.adapters.audit_log_sql import AUDIT, audit_values
 from ump.core.interfaces.model_registry import (
+    InterfaceCheck,
     ModelQuery,
     ModelRegistryPort,
     RegistryConflictError,
@@ -134,28 +137,7 @@ class ModelRecord(SQLModel, table=True):
     updated_at: Optional[datetime] = _tz()
 
 
-class AuditLogRecord(SQLModel, table=True):
-    """Append-only; ``id`` and ``occurred_at`` come from the database."""
-
-    __tablename__: str = "audit_log"
-    __table_args__ = {"schema": SCHEMA}
-
-    id: Optional[int] = Field(default=None, primary_key=True)
-    occurred_at: Optional[datetime] = _tz()
-    actor_sub: Optional[str] = None
-    actor_roles: list = Field(
-        default=None, sa_column=Column(ARRAY(Text), nullable=False)
-    )
-    action: str
-    model_id: Optional[UUID] = None
-    job_id: Optional[str] = None
-    outcome: str
-    details: dict = _jsonb()
-    request_id: Optional[str] = None
-
-
 _USERS = AppUserRecord.__table__
-_AUDIT = AuditLogRecord.__table__
 _UNIQUE_VIOLATION = "23505"
 
 # never rewritten by an update
@@ -167,10 +149,6 @@ _MODEL_IDENTITY = {
     "created_at",
     "updated_at",
 }
-
-
-def _audit_values(event: AuditEvent) -> dict[str, Any]:
-    return event.model_dump(mode="json")
 
 
 def _is_unique_violation(exc: IntegrityError) -> bool:
@@ -217,7 +195,7 @@ class SQLModelRegistryRepository(ModelRegistryPort):
                     rows = [(await session.execute(stmt)).first() for stmt in stmts]
                     if audits:
                         await session.execute(
-                            insert(_AUDIT), [_audit_values(a) for a in audits]
+                            insert(AUDIT), [audit_values(a) for a in audits]
                         )
                     if any(row is None for row in rows):
                         raise StaleWriteError("row changed or missing")
@@ -364,3 +342,38 @@ class SQLModelRegistryRepository(ModelRegistryPort):
         )
         (row,) = await self._write([stmt], [audit])
         return _model(row)
+
+    async def record_interface_checks(
+        self, checks: list[InterfaceCheck], *, audit: list[AuditEvent] = ()
+    ) -> set[UUID]:
+        # one transaction, so the providers NOTIFY trigger fires once per run
+        applied: set[UUID] = set()
+        events = list(audit)
+        async with self._session_factory() as session:
+            async with session.begin():
+                for check in checks:
+                    stmt = (
+                        update(_MODELS)
+                        .where(
+                            _MODELS.c.id == check.model_id,
+                            _MODELS.c.verified_interface_sha256.is_not_distinct_from(
+                                check.expected_verified_sha256
+                            ),
+                        )
+                        .values(
+                            interface_state=check.interface_state,
+                            current_interface_sha256=check.current_interface_sha256,
+                            last_checked_at=check.last_checked_at,
+                        )
+                        .returning(_MODELS.c.id)
+                    )
+                    if (await session.execute(stmt)).first() is None:
+                        continue
+                    applied.add(check.model_id)
+                    if check.audit is not None:
+                        events.append(check.audit)
+                if events:
+                    await session.execute(
+                        insert(AUDIT), [audit_values(e) for e in events]
+                    )
+        return applied

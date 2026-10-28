@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from datetime import datetime
 from uuid import UUID
 
 from ump.core.models.registry import AppUser, ProviderServer, RegistryModel
@@ -26,6 +27,24 @@ class RegistryConflictError(Exception):
 
 class StaleWriteError(Exception):
     """The row was changed by someone else since it was read."""
+
+
+@dataclass(frozen=True)
+class InterfaceCheck:
+    """Result of one drift check of one model (REF-F12 "Interface drift").
+
+    Applied only if the model's ``verified_interface_sha256`` still equals
+    ``expected_verified_sha256`` — the hash the check compared against — so a
+    re-verification that lands during a check is never overwritten. ``audit``
+    is stored only if the check is applied.
+    """
+
+    model_id: UUID
+    expected_verified_sha256: str | None
+    interface_state: str
+    current_interface_sha256: str | None
+    last_checked_at: datetime
+    audit: AuditEvent | None = None
 
 
 @dataclass(frozen=True)
@@ -143,3 +162,15 @@ class ModelRegistryPort(ABC):
         self, model: RegistryModel, *, expected_updated_at, audit: AuditEvent
     ) -> RegistryModel:
         """Store every field of *model* except identity (id, server, process)."""
+
+    @abstractmethod
+    async def record_interface_checks(
+        self, checks: list[InterfaceCheck], *, audit: list[AuditEvent] = ()
+    ) -> set[UUID]:
+        """Store drift-check results and *audit* in one transaction.
+
+        Writes only ``interface_state``, ``current_interface_sha256`` and
+        ``last_checked_at``, and leaves ``updated_at`` (the ETag) alone: a
+        periodic check must not invalidate the card a user is editing.
+        Returns the ids of the models whose check was applied.
+        """

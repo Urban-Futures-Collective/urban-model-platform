@@ -8,6 +8,7 @@ from typing import Any, Dict
 import pytest
 from fastapi.testclient import TestClient
 
+from ump.adapters.audit_log_inmemory import InMemoryAuditLog
 from ump.adapters.colon_process_id_validator import ColonProcessId
 from ump.adapters.job_repository_inmemory import InMemoryJobRepository
 from ump.adapters.registry_repository_inmemory import InMemoryRegistryRepository
@@ -138,6 +139,7 @@ class Env:
                 languages=["en", "de"],
                 public_catalogue=True,
                 jobs=self.jobs,
+                audit_log=InMemoryAuditLog(),
             ),
         )
         self.model = asyncio.run(self._seed())
