@@ -39,6 +39,9 @@ class ModelCardView(BaseModel):
     provider: str
     remote_process_id: str
     owner_sub: str
+    # The owner's name as cached from their token (app_user); visible to every
+    # caller who may see the model. None until the owner has used the registry.
+    owner_display_name: str | None = None
     lang: str
     languages: list[str]
     default_lang: str
@@ -58,6 +61,8 @@ class ModelCardView(BaseModel):
     test_cases: list[dict[str, Any]] = []
     io_notes: dict[str, Any] = {}
     status: str
+    # process_config "anonymous-access": runnable without a model-access role
+    anonymous_access: bool = False
     exec_state: str | None = None
     interface_state: str
     published_at: datetime | None = None

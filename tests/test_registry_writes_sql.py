@@ -294,3 +294,13 @@ async def test_sql_audit_log_append_and_filters(db):
     )
     assert [r.action for r in page] == ["job.execute"]
     assert await log.list_events(AuditQuery(since=only.occurred_at, limit=1)) == [only]
+
+
+@pytest.mark.asyncio
+async def test_get_users_returns_known_accounts_only(db):
+    repo, _ = db
+    await repo.upsert_user(AppUser(sub="named", display_name="Olga Owner"))
+    users = await repo.get_users({"owner", "named", "ghost"})
+    assert set(users) == {"owner", "named"}
+    assert users["named"].display_name == "Olga Owner"
+    assert await repo.get_users(set()) == {}

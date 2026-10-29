@@ -73,6 +73,9 @@ class InMemoryRegistryRepository(ModelRegistryPort):
         self.users[user.sub] = stored
         return stored.model_copy()
 
+    async def get_users(self, subs: set[str]) -> dict[str, AppUser]:
+        return {s: u.model_copy() for s, u in self.users.items() if s in subs}
+
     # --- provider servers -------------------------------------------------
 
     async def get_provider_server(self, name: str) -> ProviderServer | None:

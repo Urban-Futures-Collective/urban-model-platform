@@ -93,6 +93,10 @@ class ModelRegistryPort(ABC):
     async def upsert_user(self, user: AppUser) -> AppUser:
         """Insert *user*, or refresh its cached claims and ``last_seen_at``."""
 
+    @abstractmethod
+    async def get_users(self, subs: set[str]) -> dict[str, AppUser]:
+        pass
+
     # --- provider servers -------------------------------------------------
 
     @abstractmethod

@@ -221,6 +221,12 @@ class SQLModelRegistryRepository(ModelRegistryPort):
         ).returning(*_USERS.c)
         return _user(await self._one(stmt, commit=True))
 
+    async def get_users(self, subs: set[str]) -> dict[str, AppUser]:
+        if not subs:
+            return {}
+        rows = await self._all(select(*_USERS.c).where(_USERS.c.sub.in_(subs)))
+        return {u.sub: u for u in map(_user, rows)}
+
     # --- provider servers -------------------------------------------------
 
     async def get_provider_server(self, name: str) -> ProviderServer | None:
