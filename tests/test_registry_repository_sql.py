@@ -52,7 +52,8 @@ async def sql_repo(migrated):
         async with engine.begin() as conn:
             await conn.execute(
                 text(
-                    "TRUNCATE registry.model, registry.provider_server, "
+                    "TRUNCATE registry.access_request, "
+                    "registry.model, registry.provider_server, "
                     "registry.app_user"
                 )
             )

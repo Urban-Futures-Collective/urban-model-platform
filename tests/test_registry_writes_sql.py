@@ -54,7 +54,8 @@ async def db(migrated):
             # TRUNCATE does not fire the row-level audit guard
             await conn.execute(
                 text(
-                    "TRUNCATE registry.model, registry.provider_server, "
+                    "TRUNCATE registry.access_request, "
+                    "registry.model, registry.provider_server, "
                     "registry.app_user, registry.audit_log"
                 )
             )
