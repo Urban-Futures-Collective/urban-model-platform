@@ -44,9 +44,9 @@ EXPECTED = {
                 {"id": pid, "description": title, "anonymous-access": True}
                 for pid, title in (
                     ("echo", "Echo"),
-                    ("failing-job", "Fehlschlagender Job"),
-                    ("hello-world", "Hallo Welt"),
-                    ("slow", "Langsamer Prozess"),
+                    ("failing-job", "Failing job"),
+                    ("hello-world", "Hello World"),
+                    ("slow", "Slow"),
                 )
             ],
         }
@@ -145,18 +145,18 @@ async def _seed(engine) -> None:
                     full_name, purpose, license, version_label, process_config,
                     status, published_at, verified_by, verified_interface_sha256)
                 SELECT v.slug, ps.id, v.pid, 'dev-owner', v.name::jsonb,
-                       '{"de": "x"}', 'MIT', v.version, v.config::jsonb,
+                       '{"en": "x"}', 'MIT', v.version, v.config::jsonb,
                        v.status, now(), 'dev-verifier', :sha
                   FROM registry.provider_server ps,
                        (VALUES
-                         ('srv-slow', 'slow', '{"de": "Slow model"}', '1.2',
+                         ('srv-slow', 'slow', '{"en": "Slow model"}', '1.2',
                           '{"poll-interval": 2.5, "ttw-job-done": 30,
                             "result-storage": "geoserver",
                             "result-path": "result.features",
                             "graph-properties": {"root-path": "result",
                                                  "x-path": "x", "y-path": "y"}}',
                           'published'),
-                         ('srv-wip', 'wip', '{"de": "Work in progress"}', NULL,
+                         ('srv-wip', 'wip', '{"en": "Work in progress"}', NULL,
                           '{}', 'draft')
                        ) AS v(slug, pid, name, version, config, status)
                  WHERE ps.name = 'srv'
