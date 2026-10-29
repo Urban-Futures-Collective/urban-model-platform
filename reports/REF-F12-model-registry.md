@@ -1,4 +1,4 @@
-_Last_updated: 2026-09-26
+_Last_updated: 2026-10-29
 
 # Notes for the assistant
 
@@ -32,7 +32,7 @@ Artefacts:
 | # | Decision | Consequence |
 |---|---|---|
 | D1 | The registry lives in the **existing UMP database** (`ump-db`), in its own schema `registry`, managed by the existing Alembic migrations. | No new service; jobs and models can be joined; one backup. Not in Keycloak's database — that schema is private to Keycloak. |
-| D2 | **All roles live in Keycloak** (F11): the six platform roles and the model-access roles `{provider}` / `{provider}:{process}`. | The registry stores **no grants**. Whether a user may run a model is decided from the token alone, exactly as today. |
+| D2 | **All roles live in Keycloak** (F11): the six platform roles and the model-access roles `{provider}` / `{provider}:{process}`. | The registry stores **no grants**. Whether a user may run a model is decided from the token alone, exactly as today. Access *requests* and their decisions are recorded (D15), but a record never grants anything. |
 | D3 | **No visibility level** (public / municipal / private) for now. | Execution access = model-access role or `anonymous-access` (plus `verifier`, D7). Catalogue listing stays governed by `UMP_PUBLIC_PROCESSES` (D10). |
 | D4 | **No comments or ratings** for now. | Can be added later as separate tables without touching the rest. |
 | D5 | **Interface drift policy A — flag only.** When a provider's server changes a process interface, UMP records and shows it but keeps executing. | No outages caused by drift; the "verified" status can silently go stale — mitigated by making the drift visible (see [Interface drift](#interface-drift-policy-a)). |
@@ -44,6 +44,9 @@ Artefacts:
 | D11 | **Retention: 3 months** for the audit log. | Daily delete by `ump-retention`. See [Retention](#retention-3-months). |
 | D12 | **Minimal schema: four tables.** One row per model; descriptive model-card parts as JSONB; workflow rules in the core. | See [Simplification](#simplification-what-was-dropped-and-why). |
 | D13 | **Multilingual model cards** via language maps per field (`{"en": "…", "de": "…"}`), with a per-model default language that is always required. English is the platform default. | No extra table; read API resolves one language with fallback. See [Multilingual content](#multilingual-content). |
+| D14 | **Email notifications are derived from the audit log** (decided 2026-10-29). A dispatcher reads new `audit_log` rows and mails the people concerned; no outbox table. | Every audited change can notify without touching the service that makes it; no mail for rolled-back changes. +1 single-row cursor table, +3 columns on `app_user`. See [Notifications](#notifications-phase-e2). |
+| D15 | **Access requests: UMP records the workflow, Keycloak holds the grant** (option A, decided 2026-10-29). One table `access_request`; UMP-X's Nitro server maps/unmaps the Keycloak role **first** and then records the decision in UMP with the admin's token. Per model only; the model owner is informed, not asked. | UMP keeps no IdP write path (F11) and D2 stands. Grants made outside the flow (console, groups, provider-wide) are invisible to UMP; a reconciler closes records whose role is gone. Revocation still takes effect at the next token refresh. See [Access requests](#access-requests-phase-e1). |
+| D16 | **Closed access requests are deleted after 3 months** (`denied`, `withdrawn`, `revoked`), with the audit log (D11). | Open and granted records are kept as long as they are open. |
 
 ## Simplification: what was dropped and why
 
@@ -94,7 +97,10 @@ choice.
 - a database-backed `ProvidersPort` adapter that replaces `providers.yaml` as the source of
   provider/process configuration;
 - platform-role checks for the new endpoints;
-- audit log for registry actions and job executions.
+- audit log for registry actions and job executions;
+- access requests for models and the record of their decisions (phase E1; the grant
+  itself stays in Keycloak);
+- email notifications about registry changes (phase E2).
 
 **Out of scope:**
 - role and account administration → F11 (UMP-X, Keycloak Admin API);
@@ -485,8 +491,10 @@ no active flag.
 - Job executions: a new `AuditObserver` (a `JobStateObserver`) records `job.execute` and
   terminal outcomes with `job_id`; inputs are **not** copied (they are in `public.jobs`).
 - Model-card edits record a before/after diff in `details` — this replaces version history.
-- Role grants/revokes are **not** visible to UMP; they are audited by Keycloak admin events
-  (see F11).
+- Role grants/revokes are **not** made by UMP; they are audited by Keycloak admin events
+  (see F11). Grants and revokes that go through the access-request flow (phase E1) are
+  *recorded* in UMP as `access.grant` / `access.revoke` with the human admin as actor,
+  which answers F11's "who granted this" for those grants.
 
 ## Retention (3 months)
 
@@ -505,10 +513,297 @@ no active flag.
   same database user; separate database roles would be needed for that.
 - The current verification (`verified_*` on `model`) is not affected by retention; only
   older review rounds and drift events disappear with the audit log.
+- The same run deletes closed access requests (D16):
+  `DELETE FROM registry.access_request WHERE status IN ('denied','withdrawn','revoked')
+  AND status_changed_at < now() - interval '3 months'` — no guard needed, it is an
+  ordinary table.
 - Note: 3 months also bounds how far back "who ran what" can be answered from the audit
   log. `public.jobs` has no retention yet and keeps `user_id` + inputs indefinitely — out
   of scope here, but it undercuts the 3-month limit for the same data and should get the
   same rule.
+
+## Access requests (phase E1)
+
+A user who may browse a model but not run it asks for access; an `access-admin` grants or
+denies; access can later be revoked. Every step mails the people concerned (E2).
+
+### Division of labour (D15)
+
+**Keycloak stays the single source of truth for roles** (D2, F11). UMP does not write to
+Keycloak and does not consult `access_request` on the execution path — execution is still
+decided from the token alone. `access_request` is the *workflow and its record*: who asked,
+why, who decided, when.
+
+Granting and revoking change Keycloak, so they go through UMP-X's Nitro server, which already
+holds the service account (F11):
+
+```
+grant:   UMP-X ── POST /admin/access/requests/{id}/grant ──► Nitro
+         Nitro ── map {provider}:{process} to user ─────────► Keycloak   (existing mapping = ok)
+         Nitro ── POST /access-requests/{id}/transitions ───► UMP        (admin's token)
+                  {to_status: granted}                         └─ audit access.grant → E2 mail
+revoke:  same order: unmap in Keycloak first, then record `revoked` in UMP
+deny / withdraw: no Keycloak change — UMP-X calls UMP directly (/ump/** proxy)
+```
+
+**Keycloak first, then UMP.** If the second call fails, the user really has (or has lost)
+access and the record merely lags — the admin retries, both calls are idempotent. The
+reverse order could mail "access granted" for access that was never mapped.
+
+**What UMP cannot see.** Grants made in the Keycloak console, through groups, provider-wide
+(`{provider}`), or revoked there, never reach UMP. Consequences:
+
+- a `granted` record can outlive the role → the **reconciler** (below) closes it;
+- an access admin calling the UMP transition directly (bypassing Nitro) only produces a
+  wrong *record*, never access; the reconciler corrects it too;
+- **provider-wide grants are not requestable** — requests are per model. Provider-wide and
+  group grants stay in the F11 matrix.
+
+### Schema (migration 0004)
+
+```sql
+CREATE TABLE registry.access_request (
+    id                 uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_sub           text        NOT NULL REFERENCES registry.app_user(sub),
+    model_id           uuid        NOT NULL REFERENCES registry.model(id),
+    status             text        NOT NULL DEFAULT 'requested'
+                       CHECK (status IN ('requested','granted','denied','withdrawn','revoked')),
+    request_note       text,                     -- the user's reason; NULL for direct grants
+    status_note        text,                     -- note of the latest step
+    status_changed_by  text,
+    status_changed_at  timestamptz NOT NULL DEFAULT now(),
+    created_at         timestamptz NOT NULL DEFAULT now(),
+    updated_at         timestamptz NOT NULL DEFAULT now(),   -- ETag
+    -- nobody decides on their own request
+    CHECK (status NOT IN ('granted','denied') OR status_changed_by IS DISTINCT FROM user_sub),
+    -- the other side needs the reason
+    CHECK (status NOT IN ('denied','revoked') OR status_note IS NOT NULL)
+);
+-- at most one open record per user and model
+CREATE UNIQUE INDEX uq_access_request_open ON registry.access_request(user_sub, model_id)
+    WHERE status IN ('requested','granted');
+CREATE INDEX idx_access_request_queue ON registry.access_request(status, created_at);
+CREATE INDEX idx_access_request_model ON registry.access_request(model_id);
+```
+
+- **One row per lifecycle.** A new request after `denied`/`withdrawn`/`revoked` is a new row;
+  the step history is in the audit log (D12 pattern, no history table).
+- The role is **not stored**: it is `canonical_process_id(provider_server.name,
+  model.remote_process_id)`, both immutable.
+- No NOTIFY trigger: the table is not part of the provider snapshot.
+
+### Status graph (core, `core/models/registry/access.py`)
+
+```
+requested ──► granted ──► revoked
+    ├──────► denied
+    └──────► withdrawn
+```
+
+| Transition | Performed by |
+|---|---|
+| `requested → withdrawn` | the requester |
+| `requested → granted`, `requested → denied` | `access-admin`, not the requester |
+| `granted → revoked` | `access-admin` |
+| direct grant (new row in `granted`) | `access-admin`, not the user |
+
+Rules (pure core logic, exhaustively tested like `workflow.py`):
+
+- **Requesting** needs an authenticated caller who can see the model (D10 / catalogue
+  visibility), a `published` model, and a model that is **not** `anonymous-access`
+  (409 otherwise). 409 too if an open record exists, or if the caller's **token already holds**
+  `{provider}` or `{provider}:{process}` — the one place the token is consulted, to avoid
+  pointless requests.
+- **Granting** needs the model to be `published` (409 otherwise). Open requests on a model
+  that is reset or deactivated stay open; the admin queue shows the model's state, and the
+  admin denies them with a note.
+- `denied` and `revoked` need a note (DB CHECK); `granted` takes an optional one.
+- The **model owner** is informed (E2), not asked, and may read the requests for their
+  model. Making the owner an approver would mean a second decision step — not now.
+
+### API (`/registry/v1`)
+
+| Method | Path | Who |
+|---|---|---|
+| `POST` | `/models/{id}/access-requests` — `{note?}` | authenticated, see rules |
+| `POST` | `/models/{id}/access-grants` — `{user: {sub, email?, name?}, note?}`: record a grant made from the F11 matrix | `access-admin` (called by Nitro after the Keycloak mapping) |
+| `GET` | `/access-requests` — `?status=&model_id=&user=&cursor=&limit=`, newest first | `access-admin`: all; model owner: own models; others: own requests (`user` forced to the caller) |
+| `GET` | `/access-requests/{id}` | requester, owner of the model, `access-admin`; 404 otherwise |
+| `POST` | `/access-requests/{id}/transitions` — `{to_status, note?}` | per the table above; `If-Match` optional (phase C convention) |
+
+Responses carry the model (`id`, `slug`, `full_name` resolved per `?lang=`), the role name,
+the user (`sub`, `display_name`, `email` — email only for `access-admin`) and the status
+fields.
+
+`/access-grants` upserts the `app_user` row **only if absent**, from the Keycloak data Nitro
+passes — the matrix can grant to someone who never logged in to UMP. The next login
+overwrites these values from the token as usual.
+
+### Audit actions
+
+`access.request`, `access.withdraw`, `access.grant`, `access.deny`, `access.revoke`, with
+`model_id` set and `details = {access_request_id, user_sub, role, note?, direct?: true}`.
+Written in the repository transaction like every registry change. Refused requests (409)
+are not audited, same as other validation errors.
+
+### Reconciler (UMP-X)
+
+The existing `sync-roles.post.ts` reconciler (F11) gains a second pass, run with the access
+admin's token when the access page loads:
+
+1. `GET /access-requests?status=granted` (all pages).
+2. For each, check in Keycloak whether the user still holds the role **effectively**
+   (`GET /users/{id}/role-mappings/realm/composite`, so group grants count).
+3. If not → `POST /access-requests/{id}/transitions {to_status: revoked, note: "role removed
+   outside UMP"}`. The user is mailed like for any revoke.
+
+Requests whose user already holds the role (granted through a group meanwhile) are left
+open and flagged in the UI ("already has access"); the admin grants (no-op in Keycloak) or
+withdraws on their behalf by denying with a note.
+
+### Hexagonal mapping
+
+| Kind | Name | Location |
+|---|---|---|
+| Model + rules | `AccessRequest`, `AccessStatus`, transition table, `can_request` / `can_transition` | `core/models/registry/access.py` |
+| Service | `RegistryAccessService` (request, direct grant, transition, list, read) | `core/services/registry_access.py` |
+| Port (extend) | `ModelRegistryPort`: `create_access_request(req, audit)`, `update_access_request(req, expected_updated_at, audit)`, `get_access_request`, `list_access_requests(AccessQuery)`, `ensure_user(user)` | `core/interfaces/model_registry.py` |
+| Adapters (extend) | SQL (unique-index violation → 409) and in-memory repositories | `adapters/registry_repository_*.py` |
+| Router (extend) | the endpoints above | `adapters/web/registry_router.py` |
+
+No new port and no new adapter; `AuthorizationService` and the execution path are unchanged,
+so the OGC contract test is unaffected by construction.
+
+## Notifications (phase E2)
+
+Users are told by email when something that concerns them changes on UMP: a model was
+submitted for review, a review was decided, a model drifted, an access request was made or
+decided (with phase E1), and so on (D14).
+
+### The audit log is the outbox
+
+Every change worth a mail already writes an `audit_log` row **in the same transaction** as
+the change (phase B onwards). Instead of a second, parallel outbox, a dispatcher reads new
+audit rows and turns them into mails:
+
+- no service changes — a new mail is one entry in the notification policy;
+- no mail for a change that was rolled back, no change without its mail (at-least-once);
+- one source for "what happened", so the audit log and the mails cannot disagree.
+
+Costs: mails are keyed to audit action names (renaming an action is a breaking change for
+the policy — a test pins the catalogue below), and an event's `details` must carry what the
+mail needs (e.g. the target user of an access decision). The audit guard forbids UPDATE, so
+delivery state is a **cursor**, not a flag per row.
+
+### Schema (migration 0005)
+
+```sql
+CREATE TABLE registry.notification_cursor (
+    id                smallint    PRIMARY KEY CHECK (id = 1),   -- single row
+    last_audit_id     bigint      NOT NULL,   -- highest audit_log.id fully processed
+    failing_audit_id  bigint,                 -- event currently being retried
+    attempts          integer     NOT NULL DEFAULT 0,
+    updated_at        timestamptz NOT NULL DEFAULT now()
+);
+-- The migration seeds the row with coalesce(max(audit_log.id), 0): existing history is
+-- never mailed.
+
+ALTER TABLE registry.app_user
+    ADD COLUMN platform_roles text[] NOT NULL DEFAULT '{}',  -- cache, recipients only
+    ADD COLUMN lang           text,                          -- mail language
+    ADD COLUMN notify         jsonb  NOT NULL DEFAULT '{}'::jsonb
+        CHECK (jsonb_typeof(notify) = 'object');             -- {"<category>": false} opt-outs
+```
+
+- `platform_roles` caches the six platform roles (`PLATFORM_ROLES`) from the user's last
+  token; it is refreshed by the same throttled `touch` that maintains `last_seen_at`. It is
+  **only** used to find recipients ("all verifiers", "all access admins") — never for
+  authorization, which keeps reading the token. Keycloak remains the only place where roles
+  are managed (F11). The cache is stale until the user's next login: a user who lost
+  `access-admin` keeps receiving admin mails until then, a new access admin receives none
+  until their first login. `UMP_NOTIFY_FALLBACK_ADMIN_EMAILS` (a shared mailbox) covers the
+  second case.
+- `lang` comes from the token's `locale` claim (`AuthContext.locale`, new optional field),
+  restricted to `UMP_REGISTRY_LANGUAGES`; otherwise the first configured language.
+- `notify` holds opt-outs per category (`review`, `access`, `drift`, `ownership`, `jobs`).
+  Absent = default for that category (all on, except `jobs`).
+
+### Core
+
+| Kind | Name | Notes |
+|---|---|---|
+| Model | `Notification(recipient_sub, category, kind, params)` | `core/models/registry/notifications.py` |
+| Pure function | `NotificationPolicy.plan(record: AuditRecord, directory) -> list[Notification]` | The catalogue below. `directory` answers "owner of model X", "subs holding platform role R" via `ModelRegistryPort`. The actor is never notified of their own action; `outcome != success` never notifies. |
+| Service | `NotificationDispatcher` | Reads audit rows after the cursor, plans, resolves recipients (`app_user.email`, `lang`, `notify`), renders, sends, advances the cursor. |
+| Port | `MailerPort` | `async send(EmailMessage)`; raises `TransientMailError` / `PermanentMailError`. |
+| Port | `NotificationRendererPort` | `render(Notification, lang) -> EmailMessage` (subject, text, optional HTML). Presentation, so the implementation is an adapter. |
+| Port (extend) | `AuditLogPort` | `list_after(audit_id, limit)` (ascending), `get/advance cursor`. |
+
+**Dispatcher loop.** Runs as a `lifecycle` context like `InterfaceCheckScheduler`; leader
+election through `PollLockPort` with key `uuid5(NAMESPACE_URL, "ump:registry:notifications")`
+(the leader keeps the lock until shutdown). Every `UMP_NOTIFY_INTERVAL_SECONDS` (default
+30, `0` disables) it processes up to 100 events in id order:
+
+- all recipients sent (or skipped: no email, opted out, permanent error) → cursor advances;
+- transient error (SMTP down, timeout) → stop, keep cursor, `attempts += 1`, retry next
+  tick with exponential backoff (cap 15 min);
+- after `UMP_NOTIFY_MAX_ATTEMPTS` (default 10) the event is skipped and logged, so one bad
+  event cannot block the queue. Recipients that already got the mail before a retry may get
+  it twice (at-least-once).
+
+Audit ids come from an identity column and can become visible out of order (a transaction
+that took an id earlier commits later). The dispatcher therefore only reads rows older than
+`UMP_NOTIFY_SETTLE_SECONDS` (default 5), which bounds the gap to transactions that run
+longer than that — acceptable for notifications.
+
+Recipients are resolved **at send time**, not at event time: an owner transferred in
+between gets the mail. Retention (3 months) is irrelevant as long as the dispatcher is not
+months behind.
+
+### Adapters
+
+| Adapter | Implements | Notes |
+|---|---|---|
+| `adapters/mail/smtp_mailer.py` | `MailerPort` | stdlib `smtplib` via `asyncio.to_thread` (no new dependency); STARTTLS / SSL, optional login |
+| `adapters/mail/log_mailer.py` | `MailerPort` | Writes the mail to the log; dev and tests |
+| `adapters/mail/jinja_renderer.py` | `NotificationRendererPort` | Jinja2 (already a dependency); templates `adapters/mail/templates/{lang}/{kind}.subject.txt` / `.txt`; autoescape for the optional HTML part |
+
+`UMP_MAIL_BACKEND=none|log|smtp` (default `none`: no dispatcher is started). Mailpit is
+added to `docker-compose-dev.yaml` for local SMTP. Links in mails point to UMP-X
+(`UMP_FRONTEND_BASE_URL`); without it mails carry no links.
+
+### Catalogue
+
+| Audit action | Category | Recipients |
+|---|---|---|
+| `model.status.change` → `submitted` | `review` | all `verifier`s (except the owner) |
+| `model.status.change` → `submitted → draft` (withdrawn) | `review` | the verifier who picked it up, if any |
+| `model.status.change` → `changes_requested`, `rejected`, `verified`, `published`, reset to `in_review`, `deactivated` | `review` | owner (incl. `status_note`) |
+| `model.reverify` | `review` | owner |
+| `model.interface.drifted`, `model.interface.unreachable` | `drift` | owner + all `verifier`s |
+| `model.interface.restored` | `drift` | owner |
+| `model.owner.transfer` | `ownership` | previous and new owner |
+| `access.request` | `access` | all `access-admin`s (+ `UMP_NOTIFY_FALLBACK_ADMIN_EMAILS`) and the model owner |
+| `access.grant` | `access` | the user — the mail says access is active after the next login / token refresh |
+| `access.deny`, `access.revoke` | `access` | the user (incl. note) |
+| `job.complete` | `jobs` | job owner — **opt-in** (`notify.jobs = true`), off by default |
+
+Not notified: `access.withdraw`, card edits, server changes, discovery, `job.execute`, periodic
+`model.interface.changed` on never-verified models.
+
+### API
+
+| Method | Path | Role |
+|---|---|---|
+| `GET` | `/me` — gains `notify` (effective settings per category) and `lang` | any authenticated user |
+| `PATCH` | `/me/notifications` — `{"<category>": true\|false}` | the user |
+
+### Settings
+
+`UMP_MAIL_BACKEND`, `UMP_MAIL_FROM`, `UMP_SMTP_HOST`, `UMP_SMTP_PORT`, `UMP_SMTP_USER`,
+`UMP_SMTP_PASSWORD`, `UMP_SMTP_SECURITY` (`starttls|ssl|none`), `UMP_FRONTEND_BASE_URL`,
+`UMP_NOTIFY_INTERVAL_SECONDS`, `UMP_NOTIFY_SETTLE_SECONDS`, `UMP_NOTIFY_MAX_ATTEMPTS`,
+`UMP_NOTIFY_FALLBACK_ADMIN_EMAILS`.
 
 ## Hexagonal mapping
 
@@ -583,13 +878,15 @@ Decided 2026-10-19:
 Delivery phases: **A** read + identity (`/me`, `/models`, `/servers`, `/roles/vocabulary`)
 · **B** onboarding (server create/edit, discover, drafts, card edits) · **C** workflow
 (transitions, reverify, owner transfer) · **D** drift + audit (`/interface`, `/rediscover`,
-`/audit`) · **E** with v4: `/me/llm-key`, projects.
+`/audit`) · **E** access requests (E1) and email notifications (E2, see
+[Notifications](#notifications-phase-e2)) · **later, with v4**: `/me/llm-key`, projects.
 
 | Method | Path | Role |
 |---|---|---|
-| `GET` | `/me` — upserts `app_user` from the token, returns profile + platform roles | any authenticated user |
-| `PUT` · `DELETE` · `GET` | `/me/llm-key` (phase E) — `GET` returns `{set, provider, updated_at}` only | the user |
-| `GET` | `/me/llm-key/secret` (phase E) — plaintext, audited; called by UMP-X's Nitro server only | the user |
+| `GET` | `/me` — upserts `app_user` from the token, returns profile + platform roles (+ `notify`, `lang`, phase E2) | any authenticated user |
+| `PATCH` | `/me/notifications` (phase E2) — per-category opt-in/out | the user |
+| `PUT` · `DELETE` · `GET` | `/me/llm-key` (v4) — `GET` returns `{set, provider, updated_at}` only | the user |
+| `GET` | `/me/llm-key/secret` (v4) — plaintext, audited; called by UMP-X's Nitro server only | the user |
 | `POST` | `/servers` | `provider` |
 | `GET` | `/servers`, `/servers/{id}` | `provider` (own), `platform-admin` |
 | `PATCH` | `/servers/{id}` | owner, `platform-admin` |
@@ -603,6 +900,10 @@ Delivery phases: **A** read + identity (`/me`, `/models`, `/servers`, `/roles/vo
 | `GET` | `/models/{id}/interface` — state + diff to the verified interface | owner, `verifier` |
 | `GET` | `/audit` | `verifier`, `access-admin`, `platform-admin` |
 | `GET` | `/roles/vocabulary` — valid model-access role names | `access-admin`, `verifier` (used by F11 and D8) |
+| `POST` | `/models/{id}/access-requests` (phase E1) | authenticated, see [Access requests](#access-requests-phase-e1) |
+| `POST` | `/models/{id}/access-grants` (phase E1) — record a matrix grant | `access-admin` (via Nitro) |
+| `GET` | `/access-requests`, `/access-requests/{id}` (phase E1) | `access-admin`; owner (own models); requester (own) |
+| `POST` | `/access-requests/{id}/transitions` (phase E1) | requester (`withdrawn`), `access-admin` (rest; `granted`/`revoked` via Nitro) |
 
 ## Migrations
 
@@ -767,7 +1068,28 @@ drift check and `AuditObserver`.
   `outcome = failure` only for `failed`). `actor_roles` is empty — a job carries no token —
   and `model_id` is not resolved (the process id is in `details`).
 
-Not yet: phase E of the registry API, retention (`ump-retention` + CronJob).
+**Registry API phase E1 is implemented** (branch `v3.0.0alpha/registry-api-phase-d`, on
+top of D): migration 0004 (`access_request`), `POST /models/{id}/access-requests`,
+`POST /models/{id}/access-grants`, `GET /access-requests[/{id}]`,
+`POST /access-requests/{id}/transitions` — as specified in
+[Access requests](#access-requests-phase-e1).
+
+- Status graph and actor rules: `core/models/registry/access.py` (exhaustively tested);
+  service `RegistryAccessService` (`core/services/registry_access.py`); repository methods
+  on `ModelRegistryPort` (SQL + in-memory): `ensure_user`, `get_users`,
+  `get_access_request`, `list_access_requests(AccessQuery)`, `create_access_request`,
+  `update_access_request`. `AccessQuery.matches` is the reference semantics; a Postgres
+  test checks the SQL query (visibility, filters, keyset order) against it.
+- Updates write only the step columns (`status`, `status_note`, `status_changed_by/at`);
+  identity and `request_note` are never rewritten. Optimistic concurrency on `updated_at`;
+  `If-Match` optional on the transition POST (phase C convention), `ETag` on every response.
+- List order is newest first, `(created_at, id)` desc; the cursor encodes that pair.
+- `AuthorizationService` and the execution path are untouched; the OGC contract test is
+  unchanged.
+- Not part of UMP: the UMP-X routes and the reconciler pass (F11).
+
+Not yet: E2 [notifications](#notifications-phase-e2) (specified; migration 0005), retention
+(`ump-retention` + CronJob; it will also delete closed access requests, D16).
 
 ## Implementation phases
 
@@ -781,6 +1103,10 @@ Not yet: phase E of the registry API, retention (`ump-retention` + CronJob).
 4. **Workflow.** Transitions, verification, platform-role checks, audit log.
 5. **Drift (policy A).** Periodic check, state exposure, `AuditObserver`.
 6. **Retention.** `ump-retention`, CronJob in the Helm chart.
+7. **Access requests (E1).** Migration 0004 (`access_request`), status graph, service,
+   repository methods, endpoints; UMP-X Nitro routes and reconciler (F11).
+8. **Notifications (E2).** Migration 0005 (`notification_cursor`, `app_user` columns),
+   policy, dispatcher, mail adapters, `/me/notifications`.
 
 ## Tests
 
@@ -815,7 +1141,31 @@ no ordering dependence):
 - listing hides `deactivated` for all and `in_review` for non-verifiers;
 - `ProcessConfig.state` defaults to `published` — existing file-based config unchanged;
 - retention: rows older than 3 months are deleted, newer ones kept; a plain DELETE is
-  rejected.
+  rejected;
+- access status graph: every allowed transition passes, every other pair is rejected;
+  requester cannot grant/deny own request (core and CHECK); deny/revoke without note
+  rejected; request refused for anonymous-access, unpublished or invisible models, with an
+  open record, or when the token already holds `{provider}` / `{provider}:{process}`;
+  grant refused once the model is no longer published;
+- access API authorization matrix: requester / owner / `access-admin` / other per endpoint;
+  `GET /access-requests` never leaks other users' requests; email only for `access-admin`;
+- direct grant upserts an absent `app_user` and never overwrites an existing one;
+- Postgres: partial unique index (second open request → 409, new request after denial ok);
+  audit row written in the same transaction; retention deletes closed rows older than
+  3 months and keeps open ones;
+- execution is unaffected by `access_request` by construction: `AuthorizationService`
+  has no registry dependency, and the OGC contract test pins `/v1.0`;
+- notification policy (table-driven over the catalogue): recipients per action and target
+  status; actor never notified; `denied`/`failure` outcomes never notify; unknown actions
+  produce nothing; the catalogue's action names exist in the code;
+- dispatcher with an in-test `MailerPort` and in-memory audit log: cursor advances after
+  success; transient error keeps the cursor and retries; skip after max attempts; opted-out
+  and email-less recipients skipped; rows younger than the settle time not read; a second
+  worker without the lock sends nothing;
+- renderer: every catalogue kind has a template in every `UMP_REGISTRY_LANGUAGES` language;
+  fallback to the first language;
+- Postgres: migration 0005 seeds the cursor at the current max id (history not mailed);
+  end-to-end submit → verifier mail, review decision → owner mail.
 
 ## Open questions
 
@@ -829,6 +1179,13 @@ no ordering dependence):
 4. **Stale translations (D13).** Flag translations older than the default-language text in
    the UI? Needs a per-field, per-language timestamp map (one more JSONB column) or a
    derivation from the audit log (only for 3 months).
+5. **Owner as approver (D15).** Should a model owner be able to approve requests for their
+   own model (two-step: owner → access admin), or stay informed only?
+6. **Recipient cache (D14).** Is the `app_user.platform_roles` cache (stale until next
+   login) acceptable, or should admin/verifier mails go only to configured mailboxes?
+7. **Digest mails.** One mail per event can be noisy for verifiers and access admins; a
+   daily digest per category would need per-recipient state (one more table or JSONB on
+   `app_user`).
 
 Resolved 2026-09-26: verifier execution (D7), role creation on publish (D8), deactivation
 stops new runs (D9), catalogue follows `UMP_PUBLIC_PROCESSES` (D10), 3-month retention
@@ -859,6 +1216,14 @@ stops new runs (D9), catalogue follows `UMP_PUBLIC_PROCESSES` (D10), 3-month ret
 | `src/ump/core/settings.py`, `.env.example` | MODIFY — `UMP_PROVIDERS_SOURCE`, `UMP_REGISTRY_CREDENTIALS_KEY`, `UMP_INTERFACE_CHECK_INTERVAL_SECONDS`, `UMP_REGISTRY_ALLOW_HTTP`, `UMP_REGISTRY_ALLOWED_PRIVATE_HOSTS`, `UMP_REGISTRY_LANGUAGES` |
 | `src/ump/cli.py`, `pyproject.toml` | MODIFY — `ump-retention` command |
 | `charts/urban-model-platform/templates/cronjob-retention.yaml` | CREATE — daily `ump-retention` |
+| `migrations/versions/0004_access_requests.py` | DONE — `access_request` (E1) |
+| `migrations/versions/0005_notifications.py` | CREATE — `notification_cursor`, `app_user` columns (E2) |
+| `src/ump/core/models/registry/access.py`, `src/ump/core/services/registry_access.py` | DONE — access requests (E1) |
+| `src/ump/core/interfaces/model_registry.py`, `src/ump/adapters/registry_repository_*.py`, `src/ump/adapters/web/registry_router.py` | DONE — access-request methods and endpoints (E1) |
+| `src/ump/core/models/registry/notifications.py`, `src/ump/core/services/notifications.py` | CREATE — `Notification`, `NotificationPolicy`, `NotificationDispatcher` (E2) |
+| `src/ump/core/interfaces/mailer.py`, `notification_renderer.py` | CREATE — `MailerPort`, `NotificationRendererPort` (E2) |
+| `src/ump/adapters/mail/` | CREATE — `smtp_mailer.py`, `log_mailer.py`, `jinja_renderer.py`, `templates/{en,de}/` (E2) |
+| `docker-compose-dev.yaml` | MODIFY — Mailpit (E2) |
 | `tests/test_registry_*.py` | CREATE |
 | `docs/diagrams/model-registry-uml.mmd` (+ `.svg`, `.png`) | EXISTS — keep in sync |
 | `reports/REF-F12-registry-schema.sql` | EXISTS — reference DDL for 0003; keep in sync |
