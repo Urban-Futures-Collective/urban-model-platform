@@ -158,9 +158,16 @@ class RegistryCatalogService:
         servers = await self._registry.get_provider_servers_by_ids(
             {m.provider_server_id for m in rows}
         )
+        owners = await self._owner_names(rows)
         return ModelPage(
             models=[
-                self._view(m, servers[m.provider_server_id].name, auth, languages)
+                self._view(
+                    m,
+                    servers[m.provider_server_id].name,
+                    auth,
+                    languages,
+                    owners.get(m.owner_sub),
+                )
                 for m in rows
             ],
             next_cursor=next_cursor,
@@ -181,7 +188,10 @@ class RegistryCatalogService:
         server = await self._registry.get_provider_server_by_id(
             model.provider_server_id
         )
-        return self._view(model, server.name, auth, languages)
+        owners = await self._owner_names([model])
+        return self._view(
+            model, server.name, auth, languages, owners.get(model.owner_sub)
+        )
 
     async def role_vocabulary(self, auth: AuthContext) -> RoleVocabulary:
         self._authz.require_platform_role(auth, roles.ACCESS_ADMIN, roles.VERIFIER)
@@ -192,12 +202,18 @@ class RegistryCatalogService:
     # Mapping
     # ------------------------------------------------------------------
 
+    async def _owner_names(self, models: Sequence[RegistryModel]) -> dict[str, str]:
+        """Display names of the models' owners, as far as app_user knows them."""
+        users = await self._registry.get_users({m.owner_sub for m in models})
+        return {sub: u.display_name for sub, u in users.items() if u.display_name}
+
     def _view(
         self,
         model: RegistryModel,
         server_name: str,
         auth: AuthContext,
         preferences: Sequence[str],
+        owner_display_name: str | None = None,
     ) -> ModelCardView:
         available = sorted(
             {lang for m in model.language_maps() for lang in (m or {})}
@@ -240,6 +256,7 @@ class RegistryCatalogService:
             provider=server_name,
             remote_process_id=model.remote_process_id,
             owner_sub=model.owner_sub,
+            owner_display_name=owner_display_name,
             lang=lang,
             languages=available,
             default_lang=model.default_lang,
@@ -259,6 +276,7 @@ class RegistryCatalogService:
             test_cases=nested(model.test_cases, ("description",)),
             io_notes={k: text(v) for k, v in model.io_notes.items()},
             status=model.status,
+            anonymous_access=bool(model.process_config.get("anonymous-access")),
             exec_state=model.exec_state,
             interface_state=model.interface_state,
             published_at=model.published_at,

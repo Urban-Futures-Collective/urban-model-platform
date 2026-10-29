@@ -139,6 +139,7 @@ async def _seed(repo: InMemoryRegistryRepository) -> Dict[str, Any]:
             srv,
             "pub",
             "published",
+            process_config={"anonymous-access": True},
             keywords={"de": ["Rad"], "en": ["bike"]},
             applications=[{"title": {"de": "Hamburg", "en": "Hamburg"}, "year": 2025}],
             io_notes={"x": {"de": "Meter", "en": "metres"}},
@@ -390,6 +391,27 @@ def test_me_upserts_app_user_from_token():
         assert body["sub"] == "v-1" and body["display_name"] == "Vera"
         assert body["platform_roles"] == ["viewer"]
         assert repo.users["v-1"].email == "v@x"
+
+
+def test_owner_display_name_and_anonymous_flag():
+    """Issue #13: a readable owner for every caller, and the anonymous flag."""
+    import asyncio
+
+    client, repo, seeded = _client(public=True)
+    asyncio.run(repo.upsert_user(AppUser(sub="owner-1", display_name="Olga Owner")))
+    with client:
+        # anonymous caller on a public catalogue: names are visible to everyone
+        listed = {m["slug"]: m for m in _get(client, "/models").json()["models"]}
+        assert listed["srv-pub"]["owner_display_name"] == "Olga Owner"
+        assert listed["srv-pub"]["anonymous_access"] is True
+        # owner-2 never used the registry: no app_user row, no name
+        assert listed["other-fp"]["owner_display_name"] is None
+        assert listed["other-fp"]["anonymous_access"] is False
+
+        one = _get(client, f"/models/{seeded['pub'].id}").json()
+        assert one["owner_display_name"] == "Olga Owner"
+        assert one["anonymous_access"] is True
+        assert one["owner_sub"] == "owner-1"  # still there for links and checks
 
 
 def test_any_registry_request_records_the_caller():
