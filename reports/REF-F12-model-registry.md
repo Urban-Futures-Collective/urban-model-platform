@@ -1068,8 +1068,7 @@ drift check and `AuditObserver`.
   `outcome = failure` only for `failed`). `actor_roles` is empty — a job carries no token —
   and `model_id` is not resolved (the process id is in `details`).
 
-**Registry API phase E1 is implemented** (branch `v3.0.0alpha/registry-api-phase-d`, on
-top of D): migration 0004 (`access_request`), `POST /models/{id}/access-requests`,
+**Registry API phase E1 is implemented** (branch `v3.0.0alpha/registry-api-phase-e`): migration 0004 (`access_request`), `POST /models/{id}/access-requests`,
 `POST /models/{id}/access-grants`, `GET /access-requests[/{id}]`,
 `POST /access-requests/{id}/transitions` — as specified in
 [Access requests](#access-requests-phase-e1).
