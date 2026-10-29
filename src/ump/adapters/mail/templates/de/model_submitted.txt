@@ -1,0 +1,12 @@
+{% block subject %}Prüfung angefragt: {{ model.name }}{% endblock %}
+{% block body %}
+{% include "de/_greeting.txt" %}
+
+das Modell „{{ model.name }}“ ({{ model.process_id }}) wurde zur Prüfung eingereicht.
+{% if frontend_base_url %}
+
+Prüfliste: {{ frontend_base_url }}/models/{{ model.id }}
+{% endif %}
+
+{% include "de/_footer.txt" %}
+{% endblock %}

@@ -1,0 +1,17 @@
+{% block subject %}Zugriffsanfrage: {{ model.name }}{% endblock %}
+{% block body %}
+{% include "de/_greeting.txt" %}
+
+{{ user_name }} hat Zugriff auf das Modell „{{ model.name }}“ angefragt (Rolle {{ role }}).
+{% if note %}
+
+Begründung:
+{{ note }}
+{% endif %}
+{% if frontend_base_url %}
+
+Zugriffsanfragen: {{ frontend_base_url }}/admin/access
+{% endif %}
+
+{% include "de/_footer.txt" %}
+{% endblock %}

@@ -1,0 +1,22 @@
+{% block subject %}Access to {{ model.name }} {{ decision }}{% endblock %}
+{% block body %}
+{% include "en/_greeting.txt" %}
+
+{% if decision == "granted" %}
+you now have access to the model "{{ model.name }}" ({{ role }}). It becomes active the next time you sign in or your session is refreshed.
+{% elif decision == "denied" %}
+your request for access to the model "{{ model.name }}" was denied.
+{% else %}
+your access to the model "{{ model.name }}" ({{ role }}) was revoked.
+{% endif %}
+{% if note %}
+
+Note: {{ note }}
+{% endif %}
+{% if frontend_base_url %}
+
+Model: {{ frontend_base_url }}/models/{{ model.id }}
+{% endif %}
+
+{% include "en/_footer.txt" %}
+{% endblock %}

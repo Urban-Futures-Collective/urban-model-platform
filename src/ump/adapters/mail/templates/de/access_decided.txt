@@ -1,0 +1,23 @@
+{% set what = {"granted": "gewährt", "denied": "abgelehnt", "revoked": "entzogen"}[decision] %}
+{% block subject %}Zugriff auf {{ model.name }} {{ what }}{% endblock %}
+{% block body %}
+{% include "de/_greeting.txt" %}
+
+{% if decision == "granted" %}
+Sie haben jetzt Zugriff auf das Modell „{{ model.name }}“ ({{ role }}). Er wird bei der nächsten Anmeldung oder Sitzungserneuerung wirksam.
+{% elif decision == "denied" %}
+Ihre Anfrage auf Zugriff auf das Modell „{{ model.name }}“ wurde abgelehnt.
+{% else %}
+Ihr Zugriff auf das Modell „{{ model.name }}“ ({{ role }}) wurde entzogen.
+{% endif %}
+{% if note %}
+
+Anmerkung: {{ note }}
+{% endif %}
+{% if frontend_base_url %}
+
+Modell: {{ frontend_base_url }}/models/{{ model.id }}
+{% endif %}
+
+{% include "de/_footer.txt" %}
+{% endblock %}

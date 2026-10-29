@@ -3,8 +3,9 @@
 Registry changes are *not* written through this port: the repository write
 that makes a change stores its audit row in the same transaction (see
 ``ModelRegistryPort``). This port is for events that change nothing in the
-registry — job executions (``AuditObserver``) — and for reading the log
-(``GET /registry/v1/audit``).
+registry — job executions (``AuditObserver``) — for reading the log
+(``GET /registry/v1/audit``), and for reading it as the outbox of email
+notifications, with the dispatcher's cursor.
 """
 
 from __future__ import annotations
@@ -47,6 +48,20 @@ class AuditQuery:
         )
 
 
+@dataclass(frozen=True)
+class NotificationCursor:
+    """How far the notification dispatcher has read the log (migration 0005).
+
+    The log is append-only, so delivery state cannot be a flag on its rows.
+    ``failing_audit_id``/``attempts`` track the event being retried after a
+    transient mail error.
+    """
+
+    last_audit_id: int = 0
+    failing_audit_id: int | None = None
+    attempts: int = 0
+
+
 class AuditLogPort(ABC):
     @abstractmethod
     async def append(self, event: AuditEvent) -> None:
@@ -54,4 +69,22 @@ class AuditLogPort(ABC):
 
     @abstractmethod
     async def list_events(self, query: AuditQuery) -> list[AuditRecord]:
+        pass
+
+    # --- the log as notification outbox (REF-F12 "Notifications") ---------
+
+    @abstractmethod
+    async def list_after(
+        self, after_id: int, occurred_before: datetime, limit: int
+    ) -> list[AuditRecord]:
+        """Events with ``id > after_id`` and ``occurred_at < occurred_before``,
+        oldest first. The time bound skips rows of transactions that may still
+        be followed by a lower id committing late."""
+
+    @abstractmethod
+    async def get_notification_cursor(self) -> NotificationCursor:
+        pass
+
+    @abstractmethod
+    async def save_notification_cursor(self, cursor: NotificationCursor) -> None:
         pass

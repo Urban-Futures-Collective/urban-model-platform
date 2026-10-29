@@ -66,13 +66,24 @@ class InMemoryRegistryRepository(ModelRegistryPort):
         now = self._now()
         existing = self.users.get(user.sub)
         if existing is None:
-            stored = user.model_copy(update={"first_seen_at": now, "last_seen_at": now})
+            stored = user.model_copy(
+                update={
+                    "first_seen_at": now,
+                    "last_seen_at": now,
+                    "platform_roles": user.platform_roles or [],
+                    "notify": {},
+                }
+            )
         else:
             updates = {
                 k: v
-                for k, v in user.model_dump(include={"display_name", "email"}).items()
+                for k, v in user.model_dump(
+                    include={"display_name", "email", "lang"}
+                ).items()
                 if v
             }
+            if user.platform_roles is not None:
+                updates["platform_roles"] = sorted(user.platform_roles)
             stored = existing.model_copy(update={**updates, "last_seen_at": now})
         self.users[user.sub] = stored
         return stored.model_copy()
@@ -81,12 +92,29 @@ class InMemoryRegistryRepository(ModelRegistryPort):
         if user.sub not in self.users:
             now = self._now()
             self.users[user.sub] = user.model_copy(
-                update={"first_seen_at": now, "last_seen_at": now}
+                update={
+                    "first_seen_at": now,
+                    "last_seen_at": now,
+                    "platform_roles": user.platform_roles or [],
+                    "notify": {},
+                }
             )
         return self.users[user.sub].model_copy()
 
     async def get_users(self, subs: set[str]) -> dict[str, AppUser]:
         return {s: u.model_copy() for s, u in self.users.items() if s in subs}
+
+    async def list_users_with_role(self, role: str) -> list[AppUser]:
+        return [
+            u.model_copy()
+            for _, u in sorted(self.users.items())
+            if role in (u.platform_roles or [])
+        ]
+
+    async def set_notify(self, sub: str, notify: dict[str, bool]) -> AppUser:
+        user = self.users[sub]  # KeyError: callers upsert the caller first
+        self.users[sub] = user.model_copy(update={"notify": dict(notify)})
+        return self.users[sub].model_copy()
 
     # --- provider servers -------------------------------------------------
 

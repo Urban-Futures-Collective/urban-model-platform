@@ -1,0 +1,12 @@
+{% block subject %}{{ model.name }} wurde erneut verifiziert{% endblock %}
+{% block body %}
+{% include "de/_greeting.txt" %}
+
+Ihr Modell „{{ model.name }}“ ({{ model.process_id }}) wurde gegen seine aktuelle Schnittstelle erneut verifiziert.
+{% if note %}
+
+Anmerkung: {{ note }}
+{% endif %}
+
+{% include "de/_footer.txt" %}
+{% endblock %}

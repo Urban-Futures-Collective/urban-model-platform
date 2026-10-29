@@ -54,6 +54,12 @@ class AppUser(BaseModel):
     sub: str
     display_name: str | None = None
     email: str | None = None
+    # Cache of the platform roles in the user's last token (migration 0005).
+    # Only finds mail recipients; authorization always reads the token. None
+    # on a write means "unknown, keep what is stored".
+    platform_roles: list[str] | None = None
+    lang: str | None = None  # mail language
+    notify: dict[str, bool] = Field(default_factory=dict)  # per-category opt-in/out
     # set by the database; None until stored
     first_seen_at: datetime | None = None
     last_seen_at: datetime | None = None

@@ -1,0 +1,12 @@
+{% block subject %}{{ model.name }} was re-verified{% endblock %}
+{% block body %}
+{% include "en/_greeting.txt" %}
+
+your model "{{ model.name }}" ({{ model.process_id }}) was re-verified against its current interface.
+{% if note %}
+
+Note: {{ note }}
+{% endif %}
+
+{% include "en/_footer.txt" %}
+{% endblock %}

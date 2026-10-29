@@ -96,6 +96,8 @@ class MeView(BaseModel):
     roles: list[str]
     first_seen_at: datetime | None = None
     last_seen_at: datetime | None = None
+    lang: str | None = None  # mail language
+    notify: dict[str, bool] = {}  # effective notification choice per category
 
 
 class RoleVocabulary(BaseModel):

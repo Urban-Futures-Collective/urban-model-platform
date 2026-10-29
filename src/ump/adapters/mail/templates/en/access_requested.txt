@@ -1,0 +1,17 @@
+{% block subject %}Access request: {{ model.name }}{% endblock %}
+{% block body %}
+{% include "en/_greeting.txt" %}
+
+{{ user_name }} requested access to the model "{{ model.name }}" (role {{ role }}).
+{% if note %}
+
+Reason given:
+{{ note }}
+{% endif %}
+{% if frontend_base_url %}
+
+Access requests: {{ frontend_base_url }}/admin/access
+{% endif %}
+
+{% include "en/_footer.txt" %}
+{% endblock %}

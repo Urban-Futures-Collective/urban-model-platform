@@ -1,0 +1,13 @@
+{% set what = {"successful": "erfolgreich", "failed": "fehlgeschlagen", "dismissed": "abgebrochen"}.get(status, status) %}
+{% block subject %}Job {{ what }}: {{ process_id }}{% endblock %}
+{% block body %}
+{% include "de/_greeting.txt" %}
+
+Ihr Job {{ job_id }} ({{ process_id }}) ist beendet: {{ what }}.
+{% if frontend_base_url %}
+
+Job: {{ frontend_base_url }}/jobs/{{ job_id }}
+{% endif %}
+
+{% include "de/_footer.txt" %}
+{% endblock %}

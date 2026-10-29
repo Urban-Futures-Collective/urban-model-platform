@@ -28,6 +28,7 @@ class AuthContext:
     # every existing caller keeps working.
     email: Optional[str] = None
     name: Optional[str] = None
+    locale: Optional[str] = None  # mail language (REF-F12 "Notifications")
 
 
 class AuthPort(ABC):

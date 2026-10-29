@@ -122,6 +122,7 @@ class JwtAuthAdapter(AuthPort):
             is_authenticated=True,
             email=claims.get("email"),
             name=claims.get("name") or claims.get("preferred_username"),
+            locale=claims.get("locale"),
         )
 
     # ------------------------------------------------------------------

@@ -392,6 +392,19 @@ def test_me_upserts_app_user_from_token():
         assert repo.users["v-1"].email == "v@x"
 
 
+def test_notification_settings_over_http():
+    client, repo, _ = _client(public=True)
+    with client:
+        url, auth = "/registry/v1/me/notifications", {"Authorization": "Bearer viewer"}
+        assert client.patch(url, json={"jobs": True}).status_code == 401
+        body = client.patch(url, headers=auth, json={"jobs": True}).json()
+        assert body["notify"]["jobs"] is True and body["notify"]["review"] is True
+        assert repo.users["v-1"].notify == {"jobs": True}
+        assert _get(client, "/me", "viewer").json()["notify"]["jobs"] is True
+        assert client.patch(url, headers=auth, json={"spam": True}).status_code == 400
+        assert client.patch(url, headers=auth, json={"jobs": "x"}).status_code == 422
+
+
 def test_any_registry_request_records_the_caller():
     client, repo, _ = _client(public=True)
     with client:

@@ -126,7 +126,11 @@ class ModelRegistryPort(ABC):
 
     @abstractmethod
     async def upsert_user(self, user: AppUser) -> AppUser:
-        """Insert *user*, or refresh its cached claims and ``last_seen_at``."""
+        """Insert *user*, or refresh its cached claims and ``last_seen_at``.
+
+        Claims that are None (``platform_roles``, ``lang``, …) are not
+        refreshed; ``notify`` is never changed here (see ``set_notify``).
+        """
 
     @abstractmethod
     async def ensure_user(self, user: AppUser) -> AppUser:
@@ -139,6 +143,14 @@ class ModelRegistryPort(ABC):
     @abstractmethod
     async def get_users(self, subs: set[str]) -> dict[str, AppUser]:
         pass
+
+    @abstractmethod
+    async def list_users_with_role(self, role: str) -> list[AppUser]:
+        """Users whose cached ``platform_roles`` hold *role* (mail recipients)."""
+
+    @abstractmethod
+    async def set_notify(self, sub: str, notify: dict[str, bool]) -> AppUser:
+        """Replace the user's notification choices; the user must exist."""
 
     # --- provider servers -------------------------------------------------
 

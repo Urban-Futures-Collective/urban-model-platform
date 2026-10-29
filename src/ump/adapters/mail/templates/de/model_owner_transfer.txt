@@ -1,0 +1,8 @@
+{% block subject %}{{ model.name }} hat eine neue verantwortliche Person{% endblock %}
+{% block body %}
+{% include "de/_greeting.txt" %}
+
+das Modell „{{ model.name }}“ ({{ model.process_id }}) wurde von {{ previous_owner_name }} an {{ new_owner_name }} übertragen.
+
+{% include "de/_footer.txt" %}
+{% endblock %}

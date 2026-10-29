@@ -1,0 +1,25 @@
+{% set what = {
+  "in_review": "ist jetzt in Prüfung" if from == "submitted" else "wurde zur erneuten Prüfung zurückgesetzt",
+  "changes_requested": "benötigt Änderungen",
+  "rejected": "wurde abgelehnt",
+  "verified": "wurde verifiziert",
+  "published": "wurde veröffentlicht",
+  "deactivated": "wurde deaktiviert",
+}.get(to, "hat den Status „" ~ to ~ "“") %}
+{% block subject %}{{ model.name }} {{ what }}{% endblock %}
+{% block body %}
+{% include "de/_greeting.txt" %}
+
+Ihr Modell „{{ model.name }}“ ({{ model.process_id }}) {{ what }}.
+{% if note %}
+
+Anmerkung der Prüfung:
+{{ note }}
+{% endif %}
+{% if frontend_base_url %}
+
+Modell: {{ frontend_base_url }}/models/{{ model.id }}
+{% endif %}
+
+{% include "de/_footer.txt" %}
+{% endblock %}
