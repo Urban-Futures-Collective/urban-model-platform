@@ -7,6 +7,7 @@ transaction. Secrets never go into ``details``.
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any, Literal
 from uuid import UUID
 
@@ -45,3 +46,10 @@ def diff(before: dict[str, Any], after: dict[str, Any]) -> dict[str, Any]:
         for key in sorted(set(before) | set(after))
         if before.get(key) != after.get(key)
     }
+
+
+class AuditRecord(AuditEvent):
+    """A stored event; ``id`` and ``occurred_at`` are set by the audit log."""
+
+    id: int
+    occurred_at: datetime

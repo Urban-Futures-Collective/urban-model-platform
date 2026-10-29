@@ -104,6 +104,8 @@ class UmpSettings(BaseSettings):
     UMP_REGISTRY_ALLOWED_PRIVATE_HOSTS: list[str] = []
     UMP_REGISTRY_FETCH_TIMEOUT: float = 10.0
     UMP_REGISTRY_FETCH_MAX_BYTES: int = 2_000_000
+    # Interface drift check of registered models (REF-F12 policy A); 0 disables.
+    UMP_INTERFACE_CHECK_INTERVAL_SECONDS: float = 3600.0
     # When enabled, replace external links in fetched processes with local API links
     UMP_REWRITE_REMOTE_LINKS: bool = True
     # When true, JobManager verifies remote results immediately for terminal success responses

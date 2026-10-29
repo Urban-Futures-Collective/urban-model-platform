@@ -727,7 +727,47 @@ need the guarded resolver in `AioHttpClientAdapter` too.
   review → verify → publish on the real adapters; every write passes the 0003 CHECKs and the
   model appears in `v_providers_config`.
 
-Not yet: phases D–E of the registry API, drift checks, retention.
+**Registry API phase D is implemented** (branch `v3.0.0alpha/registry-api-phase-d`):
+`GET /models/{id}/interface`, `POST /servers/{id}/rediscover`, `GET /audit`, the periodic
+drift check and `AuditObserver`.
+
+- `InterfaceDriftService` (`core/services/interface_drift.py`) checks every model with a
+  non-NULL `exec_state` on an active server, through `SafeFetchPort` (so `base_url` is
+  re-validated each time) in the model's default language. Outcomes as in the table above.
+  Choices taken in implementation: **a model that was never verified is `in_sync`** (there is
+  nothing to drift from) but a hash change is audited as `model.interface.changed`; a
+  drifted model that drifts *further* is audited again; `unreachable` keeps the previous
+  `current_interface_sha256`; recovery from `unreachable` is `model.interface.restored`.
+  Periodic events have `actor_sub = NULL`; rediscover events carry the caller.
+- **Results do not touch `updated_at`.** A new port method `record_interface_checks` writes
+  only `interface_state`, `current_interface_sha256`, `last_checked_at` — otherwise an
+  hourly check would change every ETag and fail the next card `PATCH` with 412. Each write is
+  conditional on the verified hash the check compared against, so a re-verification that
+  lands during a check wins. One transaction per run → one `ump_providers_changed` NOTIFY.
+- `InterfaceCheckScheduler` runs as a `lifecycle` context (`UMP_INTERFACE_CHECK_INTERVAL_SECONDS`,
+  default 3600, `0` disables; first run after 60 s). **Leader election:** the worker that gets
+  the `PollLockPort` lock (key `uuid5(NAMESPACE_URL, "ump:registry:interface-check")`) keeps
+  it until shutdown; the others retry every interval. With a database the lock is always
+  `PgAdvisoryPollLock`, also when the job store is in memory.
+- `GET /models/{id}/interface` (owner, `verifier`, `platform-admin`; 404 if not visible) is
+  read-only: stored state plus a live fetch, its hash, `matches_verified` and a diff summary
+  (`core/models/registry/interface_diff.py`: inputs/outputs added/removed/changed, changed
+  `jobControlOptions`/`outputTransmission` — computed on the canonical interface, so text
+  edits never show). An unreachable server is reported in `live_error`, not as an error status.
+- `POST /servers/{id}/rediscover` (owner or `platform-admin`, 404 otherwise) checks that
+  server's models now and audits `server.rediscover`.
+- **Audit log port:** `AuditLogPort` (`append`, `list_events(AuditQuery)`) with
+  `SQLAuditLog` / `InMemoryAuditLog`. Registry changes still write their audit row in the
+  repository transaction; the port is for events without a registry change (jobs) and for
+  reads. `AuditLogRecord` moved to `adapters/audit_log_sql.py`. The in-memory registry
+  repository appends to an injected `InMemoryAuditLog`, so `/audit` works without a database.
+- `GET /audit` (`verifier`, `access-admin`, `platform-admin`): newest first, filters
+  `model_id`, `actor`, `action`, `job_id`, `since` (incl.), `until` (excl.); cursor = last id.
+- `AuditObserver` records `job.execute` (on create) and `job.complete` (terminal;
+  `outcome = failure` only for `failed`). `actor_roles` is empty — a job carries no token —
+  and `model_id` is not resolved (the process id is in `details`).
+
+Not yet: phase E of the registry API, retention (`ump-retention` + CronJob).
 
 ## Implementation phases
 

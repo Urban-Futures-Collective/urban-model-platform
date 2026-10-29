@@ -14,11 +14,13 @@ with ``UMP_AUTH_ENABLED=false`` (every caller anonymous) they are rejected.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Awaitable, Callable, Optional, Sequence
 from uuid import UUID
 
 from fastapi import APIRouter, Header, Query, Request, Response
 
+from ump.core.interfaces.audit_log import AuditLogPort
 from ump.core.interfaces.auth import AuthContext
 from ump.core.interfaces.credential_cipher import CredentialCipherPort
 from ump.core.interfaces.job_repository import JobRepositoryPort
@@ -38,17 +40,22 @@ from ump.core.models.registry.card import (
 from ump.core.models.registry.etag import etag_for
 from ump.core.models.registry.localized import parse_accept_language
 from ump.core.models.registry.views import (
+    AuditPage,
     DiscoveryResult,
+    InterfaceView,
     MeView,
     ModelCardView,
     ModelPage,
     ModelsCreated,
     ProviderServerList,
     ProviderServerView,
+    RediscoveryResult,
     RoleVocabulary,
 )
 from ump.core.services.authorization import AuthorizationService
+from ump.core.services.interface_drift import InterfaceDriftService
 from ump.core.services.registry_accounts import RegistryAccountService
+from ump.core.services.registry_audit import RegistryAuditService
 from ump.core.services.registry_cards import RegistryCardService
 from ump.core.services.registry_catalog import RegistryCatalogService
 from ump.core.services.registry_onboarding import RegistryOnboardingService
@@ -66,6 +73,8 @@ class RegistryServices:
     onboarding: RegistryOnboardingService
     cards: RegistryCardService
     verification: RegistryVerificationService
+    drift: InterfaceDriftService
+    audit: RegistryAuditService
 
     @classmethod
     def create(
@@ -79,6 +88,7 @@ class RegistryServices:
         languages: Sequence[str],
         public_catalogue: bool,
         jobs: JobRepositoryPort,
+        audit_log: AuditLogPort,
     ) -> "RegistryServices":
         """Assemble the core services from injected ports (no adapters built here)."""
         catalog = RegistryCatalogService(registry, authorization, public_catalogue)
@@ -112,6 +122,15 @@ class RegistryServices:
                 remote_auth=remote_auth,
                 cipher=cipher,
             ),
+            drift=InterfaceDriftService(
+                registry,
+                catalog=catalog,
+                authorization=authorization,
+                fetch=fetch,
+                remote_auth=remote_auth,
+                cipher=cipher,
+            ),
+            audit=RegistryAuditService(audit_log, authorization),
         )
 
 
@@ -235,6 +254,14 @@ def create_registry_router(
         response.headers["ETag"] = etag_for(view.updated_at)
         return view
 
+    @router.get(
+        "/models/{model_id}/interface",
+        response_model=InterfaceView,
+        summary="Interface drift state and live comparison (owner, verifier)",
+    )
+    async def model_interface(model_id: UUID, request: Request) -> InterfaceView:
+        return await services.drift.interface(await caller(request), model_id)
+
     @router.patch(
         "/models/{model_id}/owner",
         response_model=ModelCardView,
@@ -316,6 +343,14 @@ def create_registry_router(
         return await services.onboarding.discover(await caller(request), server_id)
 
     @router.post(
+        "/servers/{server_id}/rediscover",
+        response_model=RediscoveryResult,
+        summary="Check the server's models for interface drift now",
+    )
+    async def rediscover(server_id: UUID, request: Request) -> RediscoveryResult:
+        return await services.drift.rediscover(await caller(request), server_id)
+
+    @router.post(
         "/servers/{server_id}/models",
         response_model=ModelsCreated,
         status_code=201,
@@ -335,5 +370,33 @@ def create_registry_router(
     )
     async def role_vocabulary(request: Request) -> RoleVocabulary:
         return await services.catalog.role_vocabulary(await caller(request))
+
+    @router.get(
+        "/audit",
+        response_model=AuditPage,
+        summary="Audit log, newest first (verifier, access-admin, platform-admin)",
+    )
+    async def audit(
+        request: Request,
+        model_id: Optional[UUID] = None,
+        actor: Optional[str] = Query(None, description="actor sub"),
+        action: Optional[str] = None,
+        job_id: Optional[str] = None,
+        since: Optional[datetime] = Query(None, description="inclusive"),
+        until: Optional[datetime] = Query(None, description="exclusive"),
+        cursor: Optional[str] = None,
+        limit: int = Query(50, ge=1, le=200),
+    ) -> AuditPage:
+        return await services.audit.list_events(
+            await caller(request),
+            model_id=model_id,
+            actor=actor,
+            action=action,
+            job_id=job_id,
+            since=since,
+            until=until,
+            cursor=cursor,
+            limit=limit,
+        )
 
     return router

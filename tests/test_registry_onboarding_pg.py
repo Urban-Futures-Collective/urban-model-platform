@@ -22,6 +22,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from ump.adapters.audit_log_inmemory import InMemoryAuditLog
 from ump.adapters.colon_process_id_validator import ColonProcessId
 from ump.adapters.credential_cipher_fernet import FernetCredentialCipher
 from ump.adapters.job_repository_inmemory import InMemoryJobRepository
@@ -174,6 +175,7 @@ def test_onboarding_flow_on_real_adapters(database):
             languages=["de", "en"],
             public_catalogue=False,
             jobs=jobs,
+            audit_log=InMemoryAuditLog(),
         ),
     )
     headers = {"Authorization": "Bearer owner"}

@@ -4,6 +4,7 @@ This module provides production-ready observers that handle:
 - Status history recording
 - Background polling scheduling
 - Results verification
+- Audit log entries for job executions
 """
 
 import asyncio
@@ -14,6 +15,8 @@ from ump.core.models.job import Job, JobStatusInfo, StatusCode
 from ump.core.interfaces.observers import JobStateObserver
 from ump.core.interfaces.job_repository import JobRepositoryPort
 from ump.core.interfaces.http_client import HttpClientPort
+from ump.core.interfaces.audit_log import AuditLogPort
+from ump.core.models.registry.audit import AuditEvent
 
 
 logger = logging.getLogger(__name__)
@@ -171,3 +174,60 @@ class ResultsVerificationObserver:
                 f"url={results_url} error={exc}"
             )
             # Don't fail the job, just log warning
+
+
+class AuditObserver:
+    """Records job executions in the registry audit log (REF-F12 "Audit log").
+
+    ``job.execute`` when a job is created, ``job.complete`` when it reaches a
+    terminal state. Inputs are not copied — they are in the job store. The job
+    carries no token, so ``actor_roles`` is empty; the actor is ``user_id``.
+    """
+
+    def __init__(self, audit_log: AuditLogPort):
+        self._log = audit_log
+
+    def _event(self, job: Job, action: str, **fields) -> AuditEvent:
+        return AuditEvent(
+            actor_sub=job.user_id,
+            action=action,
+            job_id=job.id,
+            **fields,
+        )
+
+    async def on_job_created(
+        self,
+        job: Job,
+        status_info: JobStatusInfo,
+    ) -> None:
+        await self._log.append(
+            self._event(
+                job,
+                "job.execute",
+                details={"process_id": job.process_id, "provider": job.provider},
+            )
+        )
+
+    async def on_status_changed(
+        self,
+        job: Job,
+        old_status_info: Optional[JobStatusInfo],
+        new_status_info: JobStatusInfo,
+    ) -> None:
+        """Intermediate states are in the job's status history, not the audit log."""
+        pass
+
+    async def on_job_completed(
+        self,
+        job: Job,
+        final_status_info: JobStatusInfo,
+    ) -> None:
+        status = str(final_status_info.status)
+        await self._log.append(
+            self._event(
+                job,
+                "job.complete",
+                outcome="failure" if status == "failed" else "success",
+                details={"process_id": job.process_id, "status": status},
+            )
+        )

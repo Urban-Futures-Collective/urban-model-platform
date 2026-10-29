@@ -12,6 +12,8 @@ from uuid import UUID
 
 from pydantic import BaseModel
 
+from ump.core.models.registry.audit import AuditRecord
+
 
 class ReviewInfo(BaseModel):
     """Review details, shown to the owner, verifiers and platform admins only."""
@@ -127,3 +129,50 @@ class CreatedModel(BaseModel):
 class ModelsCreated(BaseModel):
     created: list[CreatedModel]
     existing: list[CreatedModel]  # already registered, left unchanged
+
+
+class LiveInterface(BaseModel):
+    """The process description as the server answers right now."""
+
+    sha256: str
+    description: dict[str, Any]
+
+
+class InterfaceView(BaseModel):
+    """Drift state of a model plus a live comparison (``GET …/interface``).
+
+    ``diff`` compares the live description with ``verified_interface``; it is
+    None when the model was never verified or the server could not be reached
+    (``live_error``). Stored fields reflect the last check (``last_checked_at``).
+    """
+
+    model_id: UUID
+    interface_state: str
+    last_checked_at: datetime | None = None
+    verified_at: datetime | None = None
+    verified_interface_sha256: str | None = None
+    verified_interface: dict[str, Any] | None = None
+    current_interface_sha256: str | None = None
+    live: LiveInterface | None = None
+    live_error: str | None = None
+    matches_verified: bool | None = None
+    diff: dict[str, Any] | None = None
+
+
+class InterfaceCheckResult(BaseModel):
+    model_id: UUID
+    slug: str
+    remote_process_id: str
+    previous_state: str
+    interface_state: str
+    error: str | None = None
+
+
+class RediscoveryResult(BaseModel):
+    server_id: UUID
+    checked: list[InterfaceCheckResult]
+
+
+class AuditPage(BaseModel):
+    events: list[AuditRecord]
+    next_cursor: str | None = None

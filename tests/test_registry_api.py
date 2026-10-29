@@ -12,6 +12,7 @@ from uuid import uuid4
 import pytest
 from fastapi.testclient import TestClient
 
+from ump.adapters.audit_log_inmemory import InMemoryAuditLog
 from ump.adapters.colon_process_id_validator import ColonProcessId
 from ump.adapters.job_repository_inmemory import InMemoryJobRepository
 from ump.adapters.registry_repository_inmemory import InMemoryRegistryRepository
@@ -185,6 +186,7 @@ def _client(public: bool = False):
             languages=["en", "de"],
             public_catalogue=public,
             jobs=InMemoryJobRepository("scratch/test_registry_jobs"),
+            audit_log=InMemoryAuditLog(),
         ),
     )
     return TestClient(app), repo, seeded

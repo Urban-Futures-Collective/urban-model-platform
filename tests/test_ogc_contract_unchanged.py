@@ -50,6 +50,7 @@ def ogc_contract(openapi: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _app(with_registry: bool):
+    from ump.adapters.audit_log_inmemory import InMemoryAuditLog
     from ump.adapters.colon_process_id_validator import ColonProcessId
     from ump.adapters.job_repository_inmemory import InMemoryJobRepository
     from ump.adapters.web.fastapi import create_app
@@ -74,6 +75,7 @@ def _app(with_registry: bool):
             languages=["de", "en"],
             public_catalogue=False,
             jobs=InMemoryJobRepository("scratch/test_registry_jobs"),
+            audit_log=InMemoryAuditLog(),
         )
     # openapi() never runs the lifespan, so the factories are never called
     return create_app(
