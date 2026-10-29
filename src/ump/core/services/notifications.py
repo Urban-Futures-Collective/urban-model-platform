@@ -68,6 +68,7 @@ class _Recipient:
     email: str
     lang: str
     name: str | None = None
+    sub: str | None = None  # None for a plain mailbox
 
 
 class NotificationDispatcher:
@@ -245,6 +246,7 @@ class NotificationDispatcher:
                     email=user.email,
                     lang=user.lang if user.lang in self._languages else self._lang(),
                     name=user.display_name,
+                    sub=user.sub,
                 )
             )
         recipients.extend(_Recipient(email=a, lang=self._lang()) for a in addresses)
@@ -267,6 +269,9 @@ class NotificationDispatcher:
         params: dict[str, Any] = {
             **mail.params,
             "recipient_name": recipient.name,
+            # owners and others land on different UMP-X pages (edit vs. review)
+            "recipient_is_owner": model is not None
+            and recipient.sub == model.owner_sub,
             "frontend_base_url": self._frontend,
         }
         if model is not None:

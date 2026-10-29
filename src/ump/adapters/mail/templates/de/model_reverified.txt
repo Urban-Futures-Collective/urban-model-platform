@@ -7,6 +7,10 @@ Ihr Modell „{{ model.name }}“ ({{ model.process_id }}) wurde gegen seine akt
 
 Anmerkung: {{ note }}
 {% endif %}
+{% if frontend_base_url %}
+
+Modell: {{ frontend_base_url }}/contribute/{{ model.id }}
+{% endif %}
 
 {% include "de/_footer.txt" %}
 {% endblock %}

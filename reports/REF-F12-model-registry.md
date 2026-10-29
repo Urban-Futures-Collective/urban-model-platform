@@ -768,11 +768,11 @@ months behind.
 |---|---|---|
 | `adapters/mail/smtp_mailer.py` | `MailerPort` | stdlib `smtplib` via `asyncio.to_thread` (no new dependency); STARTTLS / SSL, optional login |
 | `adapters/mail/log_mailer.py` | `MailerPort` | Writes the mail to the log; dev and tests |
-| `adapters/mail/jinja_renderer.py` | `NotificationRendererPort` | Jinja2 (already a dependency); one template per kind and language, `adapters/mail/templates/{lang}/{kind}.txt`, with blocks `subject` and `body`; `StrictUndefined`; unknown languages fall back to the first platform language. Links into UMP-X (`/models/{id}`, `/admin/access`, `/jobs/{id}`) are built only in the templates, so matching UMP-X's routes is a template edit. |
+| `adapters/mail/jinja_renderer.py` | `NotificationRendererPort` | Jinja2 (already a dependency); one template per kind and language, `adapters/mail/templates/{lang}/{kind}.txt`, with blocks `subject` and `body`; `StrictUndefined`; unknown languages fall back to the first platform language. Links into UMP-X are built only in the templates, from the frontend's routes (`ump-x-frontend` `app/pages`, checked 2026-10-29): `/verify/{model id}` for verifiers, `/contribute/{model id}` for the owner, `/commons/{process id}` (public model page) for everyone else, `/access` for access admins, `/jobs/{job id}`. The dispatcher passes `recipient_is_owner` so one mail can link owner and verifier differently. |
 
-`UMP_MAIL_BACKEND=none|log|smtp` (default `none`: no dispatcher is started). Mailpit is
-added to `docker-compose-dev.yaml` for local SMTP. Links in mails point to UMP-X
-(`UMP_FRONTEND_BASE_URL`); without it mails carry no links.
+`UMP_MAIL_BACKEND=none|log|smtp` (default `none`: no dispatcher is started); for local
+development `log` writes mails to the log. No mail service is part of the compose files.
+Links in mails point to UMP-X (`UMP_FRONTEND_BASE_URL`); without it mails carry no links.
 
 ### Catalogue
 
@@ -1106,8 +1106,6 @@ specified in [Notifications](#notifications-phase-e2).
   `de-CH` → `de` and ignores languages outside `UMP_REGISTRY_LANGUAGES`.
 - `/me` gains `lang` and `notify` (effective per category); `PATCH /me/notifications` merges
   `{category: bool}` (400 on unknown categories).
-- Mailpit in `docker-compose-dev.yaml` publishes SMTP on host port 1025; if that port is
-  taken locally, remap it.
 
 Not yet: retention (`ump-retention` + CronJob; it will also delete closed access requests,
 D16).
@@ -1244,7 +1242,6 @@ stops new runs (D9), catalogue follows `UMP_PUBLIC_PROCESSES` (D10), 3-month ret
 | `src/ump/core/models/registry/notifications.py`, `src/ump/core/services/notifications.py` | DONE — policy (`plan`), `NotificationDispatcher`, `NotificationScheduler` (E2) |
 | `src/ump/core/interfaces/mailer.py`, `notification_renderer.py` | DONE — `MailerPort`, `NotificationRendererPort` (E2) |
 | `src/ump/adapters/mail/` | DONE — `smtp_mailer.py`, `log_mailer.py`, `jinja_renderer.py`, `templates/{en,de}/` (E2) |
-| `docker-compose-dev.yaml` | DONE — Mailpit (E2) |
 | `tests/test_registry_*.py` | CREATE |
 | `docs/diagrams/model-registry-uml.mmd` (+ `.svg`, `.png`) | EXISTS — keep in sync |
 | `reports/REF-F12-registry-schema.sql` | EXISTS — reference DDL for 0003; keep in sync |

@@ -76,16 +76,6 @@ services:
     networks:
       - dev
 
-  # Catches the mails of UMP_MAIL_BACKEND=smtp (UMP_SMTP_HOST=localhost,
-  # UMP_SMTP_PORT=1025, UMP_SMTP_SECURITY=none); web UI on http://localhost:8025
-  mailpit:
-    image: axllent/mailpit:v1.21
-    ports:
-      - "1025:1025"
-      - "8025:8025"
-    networks:
-      - dev
-
 # !NOTE: here starts the dev environment setup!
 # these apps a required dependencies for the UMP
 # and are not part of the UMP itself

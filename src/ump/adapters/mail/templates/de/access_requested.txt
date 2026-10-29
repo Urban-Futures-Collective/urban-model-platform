@@ -10,7 +10,7 @@ Begründung:
 {% endif %}
 {% if frontend_base_url %}
 
-Zugriffsanfragen: {{ frontend_base_url }}/admin/access
+{% if recipient_is_owner %}Modell: {{ frontend_base_url }}/commons/{{ model.process_id }}{% else %}Zugriffsanfragen: {{ frontend_base_url }}/access{% endif %}
 {% endif %}
 
 {% include "de/_footer.txt" %}

@@ -16,7 +16,7 @@ Its server now describes a different interface than the one that was verified. T
 {% endif %}
 {% if frontend_base_url %}
 
-Model: {{ frontend_base_url }}/models/{{ model.id }}
+Model: {{ frontend_base_url }}/{{ "contribute" if recipient_is_owner else "verify" }}/{{ model.id }}
 {% endif %}
 
 {% include "en/_footer.txt" %}

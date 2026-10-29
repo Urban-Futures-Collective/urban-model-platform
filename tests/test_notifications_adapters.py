@@ -23,7 +23,11 @@ from ump.core.models.registry.notifications import KINDS
 from ump.core.services.registry_accounts import RegistryAccountService, mail_language
 
 MODEL = {"id": "m-1", "slug": "srv-echo", "process_id": "srv:echo", "name": "Echo"}
-BASE = {"recipient_name": "Ada", "frontend_base_url": "https://ump-x.example"}
+BASE = {
+    "recipient_name": "Ada",
+    "recipient_is_owner": False,
+    "frontend_base_url": "https://ump-x.example",
+}
 PARAMS = {
     "model_submitted": [{}],
     "model_status": [
@@ -94,7 +98,48 @@ def test_links_only_with_a_frontend_url():
     params = {**BASE, "model": MODEL, "note": None, "frontend_base_url": None}
     assert "http" not in renderer.render("model_reverified", "en", params).text
     with_link = renderer.render("model_submitted", "en", {**BASE, "model": MODEL})
-    assert "https://ump-x.example/models/m-1" in with_link.text
+    assert "https://ump-x.example/verify/m-1" in with_link.text
+
+
+# UMP-X routes (ump-x-frontend, app/pages): /commons/{process id} is the public model
+# page, /contribute/{model id} the owner's, /verify/{model id} the verifier's,
+# /access the access manager, /jobs/{job id} a run.
+LINKS = [
+    # (kind, params, link for the owner, link for anyone else)
+    ("model_submitted", {}, None, "/verify/m-1"),
+    ("model_status", PARAMS["model_status"][0], "/contribute/m-1", None),
+    ("model_reverified", PARAMS["model_reverified"][0], "/contribute/m-1", None),
+    ("model_interface", PARAMS["model_interface"][0], "/contribute/m-1", "/verify/m-1"),
+    (
+        "model_owner_transfer",
+        PARAMS["model_owner_transfer"][0],
+        "/contribute/m-1",
+        "/commons/srv:echo",
+    ),
+    ("access_requested", PARAMS["access_requested"][0], "/commons/srv:echo", "/access"),
+    ("access_decided", PARAMS["access_decided"][0], None, "/commons/srv:echo"),
+    ("job_complete", PARAMS["job_complete"][0], None, "/jobs/j-1"),
+]
+
+
+def test_link_cases_cover_every_kind():
+    assert {kind for kind, *_ in LINKS} == KINDS
+
+
+@pytest.mark.parametrize("lang", ["en", "de"])
+@pytest.mark.parametrize("kind,params,owner_link,other_link", LINKS)
+def test_links_point_at_the_frontend_routes(lang, kind, params, owner_link, other_link):
+    renderer = JinjaNotificationRenderer(["en", "de"])
+    for is_owner, link in ((True, owner_link), (False, other_link)):
+        if link is None:  # this recipient never gets this mail
+            continue
+        text = renderer.render(
+            kind,
+            lang,
+            {**BASE, "model": MODEL, **params, "recipient_is_owner": is_owner},
+        ).text
+        links = [w for w in text.split() if w.startswith("https://")]
+        assert links == ["https://ump-x.example" + link]
 
 
 def test_unknown_language_falls_back_to_the_default():

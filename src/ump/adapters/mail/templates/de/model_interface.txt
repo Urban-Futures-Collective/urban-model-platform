@@ -16,7 +16,7 @@ Sein Server beschreibt jetzt eine andere Schnittstelle als die verifizierte. Das
 {% endif %}
 {% if frontend_base_url %}
 
-Modell: {{ frontend_base_url }}/models/{{ model.id }}
+Modell: {{ frontend_base_url }}/{{ "contribute" if recipient_is_owner else "verify" }}/{{ model.id }}
 {% endif %}
 
 {% include "de/_footer.txt" %}

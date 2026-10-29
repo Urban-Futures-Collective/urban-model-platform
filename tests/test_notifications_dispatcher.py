@@ -166,6 +166,9 @@ def test_language_names_and_links_are_per_recipient():
     assert by_lang["en"]["model"]["name"] == "Echo"
     assert by_lang["en"]["user_name"] == "USER"
     assert by_lang["en"]["frontend_base_url"] == "https://ump-x.example"
+    # the owner gets the owner's link, the access admin the access page
+    assert by_lang["de"]["recipient_is_owner"] is True
+    assert by_lang["en"]["recipient_is_owner"] is False
 
 
 def test_opt_out_is_respected():

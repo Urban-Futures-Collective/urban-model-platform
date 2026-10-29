@@ -3,6 +3,10 @@
 {% include "en/_greeting.txt" %}
 
 the model "{{ model.name }}" ({{ model.process_id }}) was transferred from {{ previous_owner_name }} to {{ new_owner_name }}.
+{% if frontend_base_url %}
+
+Model: {{ frontend_base_url }}{% if recipient_is_owner %}/contribute/{{ model.id }}{% else %}/commons/{{ model.process_id }}{% endif %}
+{% endif %}
 
 {% include "en/_footer.txt" %}
 {% endblock %}

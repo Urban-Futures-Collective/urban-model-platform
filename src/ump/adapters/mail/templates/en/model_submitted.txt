@@ -5,7 +5,7 @@
 the model "{{ model.name }}" ({{ model.process_id }}) was submitted for review.
 {% if frontend_base_url %}
 
-Review queue: {{ frontend_base_url }}/models/{{ model.id }}
+Review: {{ frontend_base_url }}/verify/{{ model.id }}
 {% endif %}
 
 {% include "en/_footer.txt" %}

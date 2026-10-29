@@ -10,7 +10,7 @@ Reason given:
 {% endif %}
 {% if frontend_base_url %}
 
-Access requests: {{ frontend_base_url }}/admin/access
+{% if recipient_is_owner %}Model: {{ frontend_base_url }}/commons/{{ model.process_id }}{% else %}Access requests: {{ frontend_base_url }}/access{% endif %}
 {% endif %}
 
 {% include "en/_footer.txt" %}

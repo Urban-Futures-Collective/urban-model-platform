@@ -5,7 +5,7 @@
 das Modell „{{ model.name }}“ ({{ model.process_id }}) wurde zur Prüfung eingereicht.
 {% if frontend_base_url %}
 
-Prüfliste: {{ frontend_base_url }}/models/{{ model.id }}
+Prüfung: {{ frontend_base_url }}/verify/{{ model.id }}
 {% endif %}
 
 {% include "de/_footer.txt" %}

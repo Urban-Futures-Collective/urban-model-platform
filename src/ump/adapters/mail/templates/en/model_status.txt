@@ -18,7 +18,7 @@ Note from the reviewer:
 {% endif %}
 {% if frontend_base_url %}
 
-Model: {{ frontend_base_url }}/models/{{ model.id }}
+Model: {{ frontend_base_url }}/contribute/{{ model.id }}
 {% endif %}
 
 {% include "en/_footer.txt" %}

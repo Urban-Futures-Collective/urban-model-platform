@@ -15,7 +15,7 @@ Note: {{ note }}
 {% endif %}
 {% if frontend_base_url %}
 
-Model: {{ frontend_base_url }}/models/{{ model.id }}
+Model: {{ frontend_base_url }}/commons/{{ model.process_id }}
 {% endif %}
 
 {% include "en/_footer.txt" %}

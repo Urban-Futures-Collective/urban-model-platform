@@ -7,6 +7,10 @@ your model "{{ model.name }}" ({{ model.process_id }}) was re-verified against i
 
 Note: {{ note }}
 {% endif %}
+{% if frontend_base_url %}
+
+Model: {{ frontend_base_url }}/contribute/{{ model.id }}
+{% endif %}
 
 {% include "en/_footer.txt" %}
 {% endblock %}

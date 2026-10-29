@@ -16,7 +16,7 @@ Anmerkung: {{ note }}
 {% endif %}
 {% if frontend_base_url %}
 
-Modell: {{ frontend_base_url }}/models/{{ model.id }}
+Modell: {{ frontend_base_url }}/commons/{{ model.process_id }}
 {% endif %}
 
 {% include "de/_footer.txt" %}
