@@ -106,6 +106,29 @@ class UmpSettings(BaseSettings):
     UMP_REGISTRY_FETCH_MAX_BYTES: int = 2_000_000
     # Interface drift check of registered models (REF-F12 policy A); 0 disables.
     UMP_INTERFACE_CHECK_INTERVAL_SECONDS: float = 3600.0
+    # ── Email notifications (REF-F12 "Notifications") ────────────────────────
+    # "none" (default) starts no dispatcher; "log" writes mails to the log
+    # (dev); "smtp" sends them.
+    UMP_MAIL_BACKEND: Literal["none", "log", "smtp"] = "none"
+    UMP_MAIL_FROM: str = "Urban Model Platform <noreply@example.org>"
+    UMP_SMTP_HOST: str = "localhost"
+    UMP_SMTP_PORT: int = 587
+    UMP_SMTP_SECURITY: Literal["starttls", "ssl", "none"] = "starttls"
+    UMP_SMTP_USER: str | None = None
+    UMP_SMTP_PASSWORD: SecretStr | None = None
+    # UMP-X base URL for links in mails, e.g. https://ump-x.example.org;
+    # unset: mails carry no links.
+    UMP_FRONTEND_BASE_URL: str | None = None
+    # How often the dispatcher reads the audit log (seconds); 0 disables.
+    UMP_NOTIFY_INTERVAL_SECONDS: float = 30.0
+    # Audit rows younger than this are left for the next run, so a transaction
+    # that commits a lower id late is not skipped.
+    UMP_NOTIFY_SETTLE_SECONDS: float = 5.0
+    # Transient failures of one event before it is skipped.
+    UMP_NOTIFY_MAX_ATTEMPTS: int = 10
+    # Shared mailbox(es) told about access requests in addition to access
+    # admins, who are found by the roles of their last login.
+    UMP_NOTIFY_FALLBACK_ADMIN_EMAILS: list[str] = []
     # When enabled, replace external links in fetched processes with local API links
     UMP_REWRITE_REMOTE_LINKS: bool = True
     # When true, JobManager verifies remote results immediately for terminal success responses

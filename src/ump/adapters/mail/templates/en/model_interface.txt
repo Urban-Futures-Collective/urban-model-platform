@@ -1,0 +1,23 @@
+{% set what = {
+  "drifted": "changed its interface",
+  "unreachable": "cannot be reached",
+  "restored": "is back in sync",
+}[state] %}
+{% block subject %}{{ model.name }} {{ what }}{% endblock %}
+{% block body %}
+{% include "en/_greeting.txt" %}
+
+the model "{{ model.name }}" ({{ model.process_id }}) {{ what }}.
+{% if state == "drifted" %}
+Its server now describes a different interface than the one that was verified. The model still runs; a verifier should re-verify it or reset it to review.
+{% elif state == "unreachable" %}
+{% if error %}Error: {{ error }}
+{% endif %}
+{% endif %}
+{% if frontend_base_url %}
+
+Model: {{ frontend_base_url }}/{{ "contribute" if recipient_is_owner else "verify" }}/{{ model.id }}
+{% endif %}
+
+{% include "en/_footer.txt" %}
+{% endblock %}

@@ -412,6 +412,18 @@ def test_owner_display_name_and_anonymous_flag():
         assert one["owner_display_name"] == "Olga Owner"
         assert one["anonymous_access"] is True
         assert one["owner_sub"] == "owner-1"  # still there for links and checks
+        
+def test_notification_settings_over_http():
+    client, repo, _ = _client(public=True)
+    with client:
+        url, auth = "/registry/v1/me/notifications", {"Authorization": "Bearer viewer"}
+        assert client.patch(url, json={"jobs": True}).status_code == 401
+        body = client.patch(url, headers=auth, json={"jobs": True}).json()
+        assert body["notify"]["jobs"] is True and body["notify"]["review"] is True
+        assert repo.users["v-1"].notify == {"jobs": True}
+        assert _get(client, "/me", "viewer").json()["notify"]["jobs"] is True
+        assert client.patch(url, headers=auth, json={"spam": True}).status_code == 400
+        assert client.patch(url, headers=auth, json={"jobs": "x"}).status_code == 422
 
 
 def test_any_registry_request_records_the_caller():

@@ -1,4 +1,5 @@
-"""SQLModel-backed AuditLogPort (table ``registry.audit_log``, migration 0003).
+"""SQLModel-backed AuditLogPort (``registry.audit_log``, migration 0003, and
+``registry.notification_cursor``, migration 0005).
 
 The table is append-only: a trigger refuses UPDATE and DELETE outside the
 retention transaction. ``AuditLogRecord`` is also used by the registry
@@ -14,12 +15,16 @@ from datetime import datetime
 from typing import Any, Optional
 from uuid import UUID
 
-from sqlalchemy import Column, DateTime, Text
+from sqlalchemy import Column, DateTime, Text, func, update
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlmodel import Field, SQLModel, select
 
-from ump.core.interfaces.audit_log import AuditLogPort, AuditQuery
+from ump.core.interfaces.audit_log import (
+    AuditLogPort,
+    AuditQuery,
+    NotificationCursor,
+)
 from ump.core.models.registry.audit import AuditEvent, AuditRecord
 
 SCHEMA = "registry"
@@ -48,6 +53,24 @@ class AuditLogRecord(SQLModel, table=True):
 
 
 AUDIT = AuditLogRecord.__table__
+
+
+class NotificationCursorRecord(SQLModel, table=True):
+    """The single row (``id = 1``) seeded by migration 0005."""
+
+    __tablename__: str = "notification_cursor"
+    __table_args__ = {"schema": SCHEMA}
+
+    id: int = Field(primary_key=True)
+    last_audit_id: int
+    failing_audit_id: Optional[int] = None
+    attempts: int
+    updated_at: Optional[datetime] = Field(
+        default=None, sa_column=Column(DateTime(timezone=True), nullable=True)
+    )
+
+
+CURSOR = NotificationCursorRecord.__table__
 
 
 def audit_values(event: AuditEvent) -> dict[str, Any]:
@@ -80,6 +103,50 @@ class SQLAuditLog(AuditLogPort):
             stmt = stmt.where(c.occurred_at < query.until)
         if query.before_id is not None:
             stmt = stmt.where(c.id < query.before_id)
+        return await self._records(stmt)
+
+    async def list_after(
+        self, after_id: int, occurred_before: datetime, limit: int
+    ) -> list[AuditRecord]:
+        c = AUDIT.c
+        stmt = (
+            select(*c)
+            .where(c.id > after_id, c.occurred_at < occurred_before)
+            .order_by(c.id)
+            .limit(limit)
+        )
+        return await self._records(stmt)
+
+    async def get_notification_cursor(self) -> NotificationCursor:
+        async with self._session_factory() as session:
+            row = (
+                await session.execute(
+                    select(
+                        CURSOR.c.last_audit_id,
+                        CURSOR.c.failing_audit_id,
+                        CURSOR.c.attempts,
+                    ).where(CURSOR.c.id == 1)
+                )
+            ).first()
+        if row is None:  # migration 0005 seeds it; never mail old history
+            raise RuntimeError("registry.notification_cursor has no row; migrate")
+        return NotificationCursor(**row._mapping)
+
+    async def save_notification_cursor(self, cursor: NotificationCursor) -> None:
+        async with self._session_factory() as session:
+            async with session.begin():
+                await session.execute(
+                    update(CURSOR)
+                    .where(CURSOR.c.id == 1)
+                    .values(
+                        last_audit_id=cursor.last_audit_id,
+                        failing_audit_id=cursor.failing_audit_id,
+                        attempts=cursor.attempts,
+                        updated_at=func.now(),
+                    )
+                )
+
+    async def _records(self, stmt) -> list[AuditRecord]:
         async with self._session_factory() as session:
             rows = (await session.execute(stmt)).all()
         return [AuditRecord.model_validate(dict(r._mapping)) for r in rows]

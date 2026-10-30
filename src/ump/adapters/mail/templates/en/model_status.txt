@@ -1,0 +1,25 @@
+{% set what = {
+  "in_review": "is now in review" if from == "submitted" else "was reset to review",
+  "changes_requested": "needs changes",
+  "rejected": "was rejected",
+  "verified": "was verified",
+  "published": "was published",
+  "deactivated": "was deactivated",
+}.get(to, "changed to '" ~ to ~ "'") %}
+{% block subject %}{{ model.name }} {{ what }}{% endblock %}
+{% block body %}
+{% include "en/_greeting.txt" %}
+
+your model "{{ model.name }}" ({{ model.process_id }}) {{ what }}.
+{% if note %}
+
+Note from the reviewer:
+{{ note }}
+{% endif %}
+{% if frontend_base_url %}
+
+Model: {{ frontend_base_url }}/contribute/{{ model.id }}
+{% endif %}
+
+{% include "en/_footer.txt" %}
+{% endblock %}

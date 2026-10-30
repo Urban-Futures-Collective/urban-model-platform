@@ -1,0 +1,23 @@
+{% set what = {
+  "drifted": "hat seine Schnittstelle geändert",
+  "unreachable": "ist nicht erreichbar",
+  "restored": "ist wieder synchron",
+}[state] %}
+{% block subject %}{{ model.name }} {{ what }}{% endblock %}
+{% block body %}
+{% include "de/_greeting.txt" %}
+
+das Modell „{{ model.name }}“ ({{ model.process_id }}) {{ what }}.
+{% if state == "drifted" %}
+Sein Server beschreibt jetzt eine andere Schnittstelle als die verifizierte. Das Modell läuft weiter; eine Prüferin oder ein Prüfer sollte es erneut verifizieren oder zur Prüfung zurücksetzen.
+{% elif state == "unreachable" %}
+{% if error %}Fehler: {{ error }}
+{% endif %}
+{% endif %}
+{% if frontend_base_url %}
+
+Modell: {{ frontend_base_url }}/{{ "contribute" if recipient_is_owner else "verify" }}/{{ model.id }}
+{% endif %}
+
+{% include "de/_footer.txt" %}
+{% endblock %}

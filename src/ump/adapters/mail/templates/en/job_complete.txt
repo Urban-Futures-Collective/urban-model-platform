@@ -1,0 +1,12 @@
+{% block subject %}Job {{ status }}: {{ process_id }}{% endblock %}
+{% block body %}
+{% include "en/_greeting.txt" %}
+
+your job {{ job_id }} ({{ process_id }}) finished with status "{{ status }}".
+{% if frontend_base_url %}
+
+Job: {{ frontend_base_url }}/jobs/{{ job_id }}
+{% endif %}
+
+{% include "en/_footer.txt" %}
+{% endblock %}

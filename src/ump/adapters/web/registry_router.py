@@ -102,7 +102,7 @@ class RegistryServices:
         return cls(
             catalog=catalog,
             servers=RegistryServerService(registry, authorization),
-            accounts=RegistryAccountService(registry),
+            accounts=RegistryAccountService(registry, languages=languages),
             onboarding=RegistryOnboardingService(
                 registry,
                 fetch=fetch,
@@ -172,6 +172,16 @@ def create_registry_router(
     @router.get("/me", response_model=MeView, summary="The caller's account")
     async def me(request: Request) -> MeView:
         return await services.accounts.me(await get_auth(request))
+
+    @router.patch(
+        "/me/notifications",
+        response_model=MeView,
+        summary="Turn email notification categories on or off",
+    )
+    async def set_notifications(choices: dict[str, bool], request: Request) -> MeView:
+        return await services.accounts.set_notifications(
+            await get_auth(request), choices
+        )
 
     @router.get(
         "/models",

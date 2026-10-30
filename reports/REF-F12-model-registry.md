@@ -732,12 +732,14 @@ ALTER TABLE registry.app_user
 
 | Kind | Name | Notes |
 |---|---|---|
-| Model | `Notification(recipient_sub, category, kind, params)` | `core/models/registry/notifications.py` |
-| Pure function | `NotificationPolicy.plan(record: AuditRecord, directory) -> list[Notification]` | The catalogue below. `directory` answers "owner of model X", "subs holding platform role R" via `ModelRegistryPort`. The actor is never notified of their own action; `outcome != success` never notifies. |
-| Service | `NotificationDispatcher` | Reads audit rows after the cursor, plans, resolves recipients (`app_user.email`, `lang`, `notify`), renders, sends, advances the cursor. |
-| Port | `MailerPort` | `async send(EmailMessage)`; raises `TransientMailError` / `PermanentMailError`. |
-| Port | `NotificationRendererPort` | `render(Notification, lang) -> EmailMessage` (subject, text, optional HTML). Presentation, so the implementation is an adapter. |
-| Port (extend) | `AuditLogPort` | `list_after(audit_id, limit)` (ascending), `get/advance cursor`. |
+| Model | `PlannedMail(kind, category, targets, params)`, `Target(sub \| role \| email)`, `ModelRef` | `core/models/registry/notifications.py` |
+| Pure function | `plan(record: AuditRecord, model: ModelRef \| None, fallback_admin_emails) -> list[PlannedMail]` | The catalogue below. Recipients are *targets* — a user, everyone holding a platform role, or a plain address — resolved by the dispatcher, so the policy needs no port. The actor is never notified of their own action; `outcome != success` never notifies — except `job.complete`, which is addressed to its actor and also reports failed jobs. |
+| Service | `NotificationDispatcher` (`core/services/notifications.py`) | Reads audit rows after the cursor, plans, resolves targets (`get_users`, `list_users_with_role`), filters (actor, missing email, `notify`), renders per recipient language, sends, advances the cursor per event. One mail per address and event. |
+| Service | `NotificationScheduler` | Lifecycle context, leader election and backoff (below). |
+| Port | `MailerPort` | `async send(EmailMessage(to, subject, text))`; raises `TransientMailError` / `PermanentMailError`. Plain text only. |
+| Port | `NotificationRendererPort` | `render(kind, lang, params) -> RenderedMail(subject, text)`. Presentation, so the implementation is an adapter. |
+| Port (extend) | `AuditLogPort` | `list_after(after_id, occurred_before, limit)` (ascending), `get_notification_cursor`, `save_notification_cursor`. |
+| Port (extend) | `ModelRegistryPort` | `list_users_with_role(role)`, `set_notify(sub, notify)`; `upsert_user` refreshes `platform_roles`/`lang` only when given. |
 
 **Dispatcher loop.** Runs as a `lifecycle` context like `InterfaceCheckScheduler`; leader
 election through `PollLockPort` with key `uuid5(NAMESPACE_URL, "ump:registry:notifications")`
@@ -766,19 +768,18 @@ months behind.
 |---|---|---|
 | `adapters/mail/smtp_mailer.py` | `MailerPort` | stdlib `smtplib` via `asyncio.to_thread` (no new dependency); STARTTLS / SSL, optional login |
 | `adapters/mail/log_mailer.py` | `MailerPort` | Writes the mail to the log; dev and tests |
-| `adapters/mail/jinja_renderer.py` | `NotificationRendererPort` | Jinja2 (already a dependency); templates `adapters/mail/templates/{lang}/{kind}.subject.txt` / `.txt`; autoescape for the optional HTML part |
+| `adapters/mail/jinja_renderer.py` | `NotificationRendererPort` | Jinja2 (already a dependency); one template per kind and language, `adapters/mail/templates/{lang}/{kind}.txt`, with blocks `subject` and `body`; `StrictUndefined`; unknown languages fall back to the first platform language. Links into UMP-X are built only in the templates, from the frontend's routes (`ump-x-frontend` `app/pages`, checked 2026-10-29): `/verify/{model id}` for verifiers, `/contribute/{model id}` for the owner, `/commons/{process id}` (public model page) for everyone else, `/access` for access admins, `/jobs/{job id}`. The dispatcher passes `recipient_is_owner` so one mail can link owner and verifier differently. |
 
-`UMP_MAIL_BACKEND=none|log|smtp` (default `none`: no dispatcher is started). Mailpit is
-added to `docker-compose-dev.yaml` for local SMTP. Links in mails point to UMP-X
-(`UMP_FRONTEND_BASE_URL`); without it mails carry no links.
+`UMP_MAIL_BACKEND=none|log|smtp` (default `none`: no dispatcher is started); for local
+development `log` writes mails to the log. No mail service is part of the compose files.
+Links in mails point to UMP-X (`UMP_FRONTEND_BASE_URL`); without it mails carry no links.
 
 ### Catalogue
 
 | Audit action | Category | Recipients |
 |---|---|---|
 | `model.status.change` → `submitted` | `review` | all `verifier`s (except the owner) |
-| `model.status.change` → `submitted → draft` (withdrawn) | `review` | the verifier who picked it up, if any |
-| `model.status.change` → `changes_requested`, `rejected`, `verified`, `published`, reset to `in_review`, `deactivated` | `review` | owner (incl. `status_note`) |
+| `model.status.change` → `in_review` (picked up, or reset), `changes_requested`, `rejected`, `verified`, `published`, `deactivated` | `review` | owner (incl. the note) |
 | `model.reverify` | `review` | owner |
 | `model.interface.drifted`, `model.interface.unreachable` | `drift` | owner + all `verifier`s |
 | `model.interface.restored` | `drift` | owner |
@@ -788,7 +789,9 @@ added to `docker-compose-dev.yaml` for local SMTP. Links in mails point to UMP-X
 | `access.deny`, `access.revoke` | `access` | the user (incl. note) |
 | `job.complete` | `jobs` | job owner — **opt-in** (`notify.jobs = true`), off by default |
 
-Not notified: `access.withdraw`, card edits, server changes, discovery, `job.execute`, periodic
+Not notified: `submitted → draft` (a withdrawal before anyone picked the model up — the
+earlier draft of this table named "the verifier who picked it up", but a `submitted` model
+has not been picked up yet), `access.withdraw`, card edits, server changes, discovery, `job.execute`, periodic
 `model.interface.changed` on never-verified models.
 
 ### API
@@ -1087,8 +1090,25 @@ drift check and `AuditObserver`.
   unchanged.
 - Not part of UMP: the UMP-X routes and the reconciler pass (F11).
 
-Not yet: E2 [notifications](#notifications-phase-e2) (specified; migration 0005), retention
-(`ump-retention` + CronJob; it will also delete closed access requests, D16).
+**Registry API phase E2 is implemented** (branch `v3.0.0alpha/registry-api-phase-e2`, on
+top of E1): migration 0005, the dispatcher, mail adapters and `PATCH /me/notifications`, as
+specified in [Notifications](#notifications-phase-e2).
+
+- Off by default (`UMP_MAIL_BACKEND=none`); `log` writes mails to the log, `smtp` sends them
+  (stdlib `smtplib` in a thread, one connection per mail). Wired in `asgi.py` as a second
+  lifecycle task; the drift check and the dispatcher share one `PollLockPort` instance
+  (`registry_lock`) with different keys.
+- Choices taken in implementation: the owner is also told when a verifier **picks up** the
+  model (`submitted → in_review`); `submitted → draft` notifies nobody (see the catalogue
+  note); a template error skips that mail, not the queue; renderer and mailer are plain
+  text only (no HTML part).
+- `AuthContext.locale` comes from the token's `locale` claim; `mail_language` maps
+  `de-CH` → `de` and ignores languages outside `UMP_REGISTRY_LANGUAGES`.
+- `/me` gains `lang` and `notify` (effective per category); `PATCH /me/notifications` merges
+  `{category: bool}` (400 on unknown categories).
+
+Not yet: retention (`ump-retention` + CronJob; it will also delete closed access requests,
+D16).
 
 ## Implementation phases
 
@@ -1102,9 +1122,9 @@ Not yet: E2 [notifications](#notifications-phase-e2) (specified; migration 0005)
 4. **Workflow.** Transitions, verification, platform-role checks, audit log.
 5. **Drift (policy A).** Periodic check, state exposure, `AuditObserver`.
 6. **Retention.** `ump-retention`, CronJob in the Helm chart.
-7. **Access requests (E1).** Migration 0004 (`access_request`), status graph, service,
+7. **Access requests (E1), done.** Migration 0004 (`access_request`), status graph, service,
    repository methods, endpoints; UMP-X Nitro routes and reconciler (F11).
-8. **Notifications (E2).** Migration 0005 (`notification_cursor`, `app_user` columns),
+8. **Notifications (E2), done.** Migration 0005 (`notification_cursor`, `app_user` columns),
    policy, dispatcher, mail adapters, `/me/notifications`.
 
 ## Tests
@@ -1216,13 +1236,12 @@ stops new runs (D9), catalogue follows `UMP_PUBLIC_PROCESSES` (D10), 3-month ret
 | `src/ump/cli.py`, `pyproject.toml` | MODIFY — `ump-retention` command |
 | `charts/urban-model-platform/templates/cronjob-retention.yaml` | CREATE — daily `ump-retention` |
 | `migrations/versions/0004_access_requests.py` | DONE — `access_request` (E1) |
-| `migrations/versions/0005_notifications.py` | CREATE — `notification_cursor`, `app_user` columns (E2) |
+| `migrations/versions/0005_notifications.py` | DONE — `notification_cursor`, `app_user` columns (E2) |
 | `src/ump/core/models/registry/access.py`, `src/ump/core/services/registry_access.py` | DONE — access requests (E1) |
 | `src/ump/core/interfaces/model_registry.py`, `src/ump/adapters/registry_repository_*.py`, `src/ump/adapters/web/registry_router.py` | DONE — access-request methods and endpoints (E1) |
-| `src/ump/core/models/registry/notifications.py`, `src/ump/core/services/notifications.py` | CREATE — `Notification`, `NotificationPolicy`, `NotificationDispatcher` (E2) |
-| `src/ump/core/interfaces/mailer.py`, `notification_renderer.py` | CREATE — `MailerPort`, `NotificationRendererPort` (E2) |
-| `src/ump/adapters/mail/` | CREATE — `smtp_mailer.py`, `log_mailer.py`, `jinja_renderer.py`, `templates/{en,de}/` (E2) |
-| `docker-compose-dev.yaml` | MODIFY — Mailpit (E2) |
+| `src/ump/core/models/registry/notifications.py`, `src/ump/core/services/notifications.py` | DONE — policy (`plan`), `NotificationDispatcher`, `NotificationScheduler` (E2) |
+| `src/ump/core/interfaces/mailer.py`, `notification_renderer.py` | DONE — `MailerPort`, `NotificationRendererPort` (E2) |
+| `src/ump/adapters/mail/` | DONE — `smtp_mailer.py`, `log_mailer.py`, `jinja_renderer.py`, `templates/{en,de}/` (E2) |
 | `tests/test_registry_*.py` | CREATE |
 | `docs/diagrams/model-registry-uml.mmd` (+ `.svg`, `.png`) | EXISTS — keep in sync |
 | `reports/REF-F12-registry-schema.sql` | EXISTS — reference DDL for 0003; keep in sync |

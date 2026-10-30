@@ -24,8 +24,17 @@ from datetime import datetime
 from typing import Any, Optional
 from uuid import UUID
 
-from sqlalchemy import Column, DateTime, LargeBinary, func, or_, tuple_, update
-from sqlalchemy.dialects.postgresql import JSONB, insert
+from sqlalchemy import (
+    Column,
+    DateTime,
+    LargeBinary,
+    Text,
+    func,
+    or_,
+    tuple_,
+    update,
+)
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB, insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlmodel import Field, SQLModel, select
@@ -52,6 +61,7 @@ _DB_DEFAULTED = {
     "created_at",
     "updated_at",
     "status_changed_at",
+    "platform_roles",
 }
 
 
@@ -82,6 +92,11 @@ class AppUserRecord(SQLModel, table=True):
     email: Optional[str] = None
     first_seen_at: Optional[datetime] = _tz()
     last_seen_at: Optional[datetime] = _tz()
+    platform_roles: list = Field(
+        default=None, sa_column=Column(ARRAY(Text), nullable=False)
+    )
+    lang: Optional[str] = None
+    notify: dict = _jsonb()
 
 
 class ProviderServerRecord(SQLModel, table=True):
@@ -242,11 +257,15 @@ class SQLModelRegistryRepository(ModelRegistryPort):
 
     async def upsert_user(self, user: AppUser) -> AppUser:
         values = _insert_values(user)
+        if user.platform_roles is not None:
+            values["platform_roles"] = sorted(user.platform_roles)
         stmt = insert(_USERS).values(**values)
         refreshed = {
             k: stmt.excluded[k]
-            for k in ("display_name", "email")
-            if values.get(k)  # never overwrite a cached claim with nothing
+            for k in ("display_name", "email", "lang", "platform_roles")
+            # never overwrite a cached claim with nothing (an empty role list
+            # is a claim: the user lost their roles)
+            if values.get(k) or (k == "platform_roles" and k in values)
         }
         refreshed["last_seen_at"] = func.now()
         stmt = stmt.on_conflict_do_update(
@@ -273,6 +292,26 @@ class SQLModelRegistryRepository(ModelRegistryPort):
             return {}
         rows = await self._all(select(*_USERS.c).where(_USERS.c.sub.in_(subs)))
         return {u.sub: u for u in map(_user, rows)}
+
+    async def list_users_with_role(self, role: str) -> list[AppUser]:
+        rows = await self._all(
+            select(*_USERS.c)
+            .where(_USERS.c.platform_roles.any(role))
+            .order_by(_USERS.c.sub)
+        )
+        return [_user(r) for r in rows]
+
+    async def set_notify(self, sub: str, notify: dict[str, bool]) -> AppUser:
+        row = await self._one(
+            update(_USERS)
+            .where(_USERS.c.sub == sub)
+            .values(notify=notify)
+            .returning(*_USERS.c),
+            commit=True,
+        )
+        if row is None:
+            raise KeyError(sub)
+        return _user(row)
 
     # --- provider servers -------------------------------------------------
 
