@@ -29,6 +29,9 @@ from ump.core.interfaces.providers import ProvidersPort
 from ump.core.interfaces.remote_auth import RemoteAuthPort
 from ump.core.interfaces.safe_fetch import SafeFetchPort
 from ump.core.models.registry.card import (
+    AccessGrantCreate,
+    AccessRequestCreate,
+    AccessTransitionRequest,
     ModelCardPatch,
     ModelsCreate,
     OwnerTransfer,
@@ -40,6 +43,8 @@ from ump.core.models.registry.card import (
 from ump.core.models.registry.etag import etag_for
 from ump.core.models.registry.localized import parse_accept_language
 from ump.core.models.registry.views import (
+    AccessRequestPage,
+    AccessRequestView,
     AuditPage,
     DiscoveryResult,
     InterfaceView,
@@ -54,6 +59,7 @@ from ump.core.models.registry.views import (
 )
 from ump.core.services.authorization import AuthorizationService
 from ump.core.services.interface_drift import InterfaceDriftService
+from ump.core.services.registry_access import RegistryAccessService
 from ump.core.services.registry_accounts import RegistryAccountService
 from ump.core.services.registry_audit import RegistryAuditService
 from ump.core.services.registry_cards import RegistryCardService
@@ -75,6 +81,7 @@ class RegistryServices:
     verification: RegistryVerificationService
     drift: InterfaceDriftService
     audit: RegistryAuditService
+    access: RegistryAccessService
 
     @classmethod
     def create(
@@ -131,6 +138,7 @@ class RegistryServices:
                 cipher=cipher,
             ),
             audit=RegistryAuditService(audit_log, authorization),
+            access=RegistryAccessService(registry, catalog, authorization),
         )
 
 
@@ -139,6 +147,15 @@ def _languages(request: Request, lang: Optional[str]) -> list[str]:
     if lang:
         return [lang]
     return parse_accept_language(request.headers.get("accept-language"))
+
+
+def _access_headers(
+    request: Request, response: Response, view: AccessRequestView
+) -> None:
+    response.headers["Location"] = str(
+        request.url_for("get_access_request", request_id=view.id).path
+    )
+    response.headers["ETag"] = etag_for(view.updated_at)
 
 
 def create_registry_router(
@@ -276,6 +293,108 @@ def create_registry_router(
     ) -> ModelCardView:
         view = await services.verification.transfer_owner(
             await caller(request), model_id, body, if_match
+        )
+        response.headers["ETag"] = etag_for(view.updated_at)
+        return view
+
+    @router.post(
+        "/models/{model_id}/access-requests",
+        response_model=AccessRequestView,
+        status_code=201,
+        summary="Request access to a published model",
+    )
+    async def request_access(
+        model_id: UUID,
+        body: AccessRequestCreate,
+        request: Request,
+        response: Response,
+        lang: Optional[str] = Query(None),
+    ) -> AccessRequestView:
+        view = await services.access.request(
+            await caller(request), model_id, body, _languages(request, lang)
+        )
+        _access_headers(request, response, view)
+        return view
+
+    @router.post(
+        "/models/{model_id}/access-grants",
+        response_model=AccessRequestView,
+        status_code=201,
+        summary="Record a grant made in Keycloak without a request (access admin)",
+    )
+    async def grant_access(
+        model_id: UUID,
+        body: AccessGrantCreate,
+        request: Request,
+        response: Response,
+        lang: Optional[str] = Query(None),
+    ) -> AccessRequestView:
+        view = await services.access.grant_directly(
+            await caller(request), model_id, body, _languages(request, lang)
+        )
+        _access_headers(request, response, view)
+        return view
+
+    @router.get(
+        "/access-requests",
+        response_model=AccessRequestPage,
+        summary="Access requests: all for access admins, else own and own models'",
+    )
+    async def list_access_requests(
+        request: Request,
+        status: Optional[str] = None,
+        model_id: Optional[UUID] = None,
+        user: Optional[str] = Query(None, description="requesting user's sub"),
+        cursor: Optional[str] = None,
+        limit: int = Query(50, ge=1, le=200),
+        lang: Optional[str] = Query(None),
+    ) -> AccessRequestPage:
+        return await services.access.list_requests(
+            await caller(request),
+            status=status,
+            model_id=model_id,
+            user=user,
+            cursor=cursor,
+            limit=limit,
+            languages=_languages(request, lang),
+        )
+
+    @router.get(
+        "/access-requests/{request_id}",
+        response_model=AccessRequestView,
+        summary="One access request",
+    )
+    async def get_access_request(
+        request_id: UUID,
+        request: Request,
+        response: Response,
+        lang: Optional[str] = Query(None),
+    ) -> AccessRequestView:
+        view = await services.access.get_request(
+            await caller(request), request_id, _languages(request, lang)
+        )
+        response.headers["ETag"] = etag_for(view.updated_at)
+        return view
+
+    @router.post(
+        "/access-requests/{request_id}/transitions",
+        response_model=AccessRequestView,
+        summary="Withdraw, grant, deny or revoke an access request",
+    )
+    async def transition_access_request(
+        request_id: UUID,
+        body: AccessTransitionRequest,
+        request: Request,
+        response: Response,
+        if_match: Optional[str] = Header(None),
+        lang: Optional[str] = Query(None),
+    ) -> AccessRequestView:
+        view = await services.access.transition(
+            await caller(request),
+            request_id,
+            body,
+            if_match,
+            _languages(request, lang),
         )
         response.headers["ETag"] = etag_for(view.updated_at)
         return view

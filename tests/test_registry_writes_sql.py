@@ -54,7 +54,8 @@ async def db(migrated):
             # TRUNCATE does not fire the row-level audit guard
             await conn.execute(
                 text(
-                    "TRUNCATE registry.model, registry.provider_server, "
+                    "TRUNCATE registry.access_request, "
+                    "registry.model, registry.provider_server, "
                     "registry.app_user, registry.audit_log"
                 )
             )
@@ -93,7 +94,7 @@ def _model(server: ProviderServer, pid: str, slug: str | None = None) -> Registr
         provider_server_id=server.id,
         remote_process_id=pid,
         owner_sub="owner",
-        full_name={"de": pid},
+        full_name={"en": pid},
     )
 
 
@@ -225,14 +226,13 @@ async def test_interface_checks_keep_the_etag_and_skip_reverified_models(db):
         [
             _model(server, "p1").model_copy(
                 update={
-                    "default_lang": "de",
                     "verified_interface": {"inputs": {}},
                     "verified_interface_sha256": sha,
                     "current_interface_sha256": sha,
                     "interface_state": "in_sync",
                 }
             ),
-            _model(server, "p2").model_copy(update={"default_lang": "de"}),
+            _model(server, "p2"),
         ],
         audit=[_event("model.create")],
     )

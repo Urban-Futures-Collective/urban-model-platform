@@ -2,9 +2,10 @@
 
 Same two-model pattern as job_repository_sql.py:
   - Core domain models: ump.core.models.registry (pure Pydantic, no ORM)
-  - Adapter ORM models: AppUserRecord / ProviderServerRecord / ModelRecord
+  - Adapter ORM models: AppUserRecord / ProviderServerRecord / ModelRecord /
+    AccessRequestRecord
 
-The tables are created by migration 0003. ``exec_state`` is a generated column
+The tables are created by migrations 0003 and 0004. ``exec_state`` is a generated column
 and not mapped (the core derives it, see ``exec_state_for``). Columns with
 database defaults (timestamps) are left out of INSERTs when the domain value is
 None, and every write returns the stored row.
@@ -23,7 +24,7 @@ from datetime import datetime
 from typing import Any, Optional
 from uuid import UUID
 
-from sqlalchemy import Column, DateTime, LargeBinary, func, or_, update
+from sqlalchemy import Column, DateTime, LargeBinary, func, or_, tuple_, update
 from sqlalchemy.dialects.postgresql import JSONB, insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -31,6 +32,7 @@ from sqlmodel import Field, SQLModel, select
 
 from ump.adapters.audit_log_sql import AUDIT, audit_values
 from ump.core.interfaces.model_registry import (
+    AccessQuery,
     InterfaceCheck,
     ModelQuery,
     ModelRegistryPort,
@@ -38,12 +40,19 @@ from ump.core.interfaces.model_registry import (
     StaleWriteError,
 )
 from ump.core.models.registry import AppUser, ProviderServer, RegistryModel
+from ump.core.models.registry.access import AccessRequest
 from ump.core.models.registry.audit import AuditEvent
 
 SCHEMA = "registry"
 
 # Columns whose value the database supplies when the domain model has none.
-_DB_DEFAULTED = {"first_seen_at", "last_seen_at", "created_at", "updated_at"}
+_DB_DEFAULTED = {
+    "first_seen_at",
+    "last_seen_at",
+    "created_at",
+    "updated_at",
+    "status_changed_at",
+}
 
 
 def _tz(nullable: bool = True) -> Any:
@@ -137,6 +146,22 @@ class ModelRecord(SQLModel, table=True):
     updated_at: Optional[datetime] = _tz()
 
 
+class AccessRequestRecord(SQLModel, table=True):
+    __tablename__: str = "access_request"
+    __table_args__ = {"schema": SCHEMA}
+
+    id: UUID = Field(primary_key=True)
+    user_sub: str
+    model_id: UUID
+    status: str
+    request_note: Optional[str] = None
+    status_note: Optional[str] = None
+    status_changed_by: Optional[str] = None
+    status_changed_at: Optional[datetime] = _tz()
+    created_at: Optional[datetime] = _tz()
+    updated_at: Optional[datetime] = _tz()
+
+
 _USERS = AppUserRecord.__table__
 _UNIQUE_VIOLATION = "23505"
 
@@ -158,6 +183,10 @@ def _is_unique_violation(exc: IntegrityError) -> bool:
 
 _SERVERS = ProviderServerRecord.__table__
 _MODELS = ModelRecord.__table__
+_ACCESS = AccessRequestRecord.__table__
+
+# the only columns a step of the access workflow changes
+_ACCESS_STEP = ("status", "status_note", "status_changed_by", "status_changed_at")
 
 
 def _user(row: Any) -> AppUser:
@@ -170,6 +199,10 @@ def _server(row: Any) -> ProviderServer:
 
 def _model(row: Any) -> RegistryModel:
     return RegistryModel.model_validate(dict(row._mapping))
+
+
+def _access(row: Any) -> AccessRequest:
+    return AccessRequest.model_validate(dict(row._mapping))
 
 
 class SQLModelRegistryRepository(ModelRegistryPort):
@@ -220,6 +253,26 @@ class SQLModelRegistryRepository(ModelRegistryPort):
             index_elements=["sub"], set_=refreshed
         ).returning(*_USERS.c)
         return _user(await self._one(stmt, commit=True))
+
+    async def ensure_user(self, user: AppUser) -> AppUser:
+        inserted = await self._one(
+            insert(_USERS)
+            .values(**_insert_values(user))
+            .on_conflict_do_nothing(index_elements=["sub"])
+            .returning(*_USERS.c),
+            commit=True,
+        )
+        if inserted is None:  # known already: keep the row as it is
+            inserted = await self._one(
+                select(*_USERS.c).where(_USERS.c.sub == user.sub)
+            )
+        return _user(inserted)
+
+    async def get_users(self, subs: set[str]) -> dict[str, AppUser]:
+        if not subs:
+            return {}
+        rows = await self._all(select(*_USERS.c).where(_USERS.c.sub.in_(subs)))
+        return {u.sub: u for u in map(_user, rows)}
 
     # --- provider servers -------------------------------------------------
 
@@ -377,3 +430,51 @@ class SQLModelRegistryRepository(ModelRegistryPort):
                         insert(AUDIT), [audit_values(e) for e in events]
                     )
         return applied
+
+    # --- access requests --------------------------------------------------
+
+    async def get_access_request(self, request_id: UUID) -> AccessRequest | None:
+        row = await self._one(select(*_ACCESS.c).where(_ACCESS.c.id == request_id))
+        return _access(row) if row else None
+
+    async def list_access_requests(self, query: AccessQuery) -> list[AccessRequest]:
+        c = _ACCESS.c
+        stmt = select(*c).order_by(c.created_at.desc(), c.id.desc()).limit(query.limit)
+        if query.visible_to is not None:
+            owned = select(_MODELS.c.id).where(_MODELS.c.owner_sub == query.visible_to)
+            stmt = stmt.where(
+                or_(c.user_sub == query.visible_to, c.model_id.in_(owned))
+            )
+        if query.status is not None:
+            stmt = stmt.where(c.status == query.status)
+        if query.model_id is not None:
+            stmt = stmt.where(c.model_id == query.model_id)
+        if query.user_sub is not None:
+            stmt = stmt.where(c.user_sub == query.user_sub)
+        if query.before is not None:
+            stmt = stmt.where(tuple_(c.created_at, c.id) < tuple_(*query.before))
+        return [_access(r) for r in await self._all(stmt)]
+
+    async def create_access_request(
+        self, request: AccessRequest, *, audit: AuditEvent
+    ) -> AccessRequest:
+        stmt = insert(_ACCESS).values(**_insert_values(request)).returning(*_ACCESS.c)
+        (row,) = await self._write([stmt], [audit])
+        return _access(row)
+
+    async def update_access_request(
+        self, request: AccessRequest, *, expected_updated_at, audit: AuditEvent
+    ) -> AccessRequest:
+        stmt = (
+            update(_ACCESS)
+            .where(
+                _ACCESS.c.id == request.id,
+                _ACCESS.c.updated_at == expected_updated_at,
+            )
+            .values(
+                **request.model_dump(include=set(_ACCESS_STEP)), updated_at=func.now()
+            )
+            .returning(*_ACCESS.c)
+        )
+        (row,) = await self._write([stmt], [audit])
+        return _access(row)

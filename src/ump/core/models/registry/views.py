@@ -176,3 +176,38 @@ class RediscoveryResult(BaseModel):
 class AuditPage(BaseModel):
     events: list[AuditRecord]
     next_cursor: str | None = None
+
+
+class AccessModelRef(BaseModel):
+    id: UUID
+    slug: str
+    process_id: str  # also the model-access role name, `{provider}:{process}`
+    full_name: str | None = None  # in the requested language, else default
+    status: str
+
+
+class AccessUserRef(BaseModel):
+    sub: str
+    display_name: str | None = None
+    email: str | None = None  # access admins only
+
+
+class AccessRequestView(BaseModel):
+    """An access request (REF-F12 phase E1). ``role`` is what UMP-X maps."""
+
+    id: UUID
+    model: AccessModelRef
+    role: str
+    user: AccessUserRef
+    status: str
+    request_note: str | None = None
+    status_note: str | None = None
+    status_changed_by: str | None = None
+    status_changed_at: datetime | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+class AccessRequestPage(BaseModel):
+    requests: list[AccessRequestView]
+    next_cursor: str | None = None

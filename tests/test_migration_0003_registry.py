@@ -72,7 +72,7 @@ def _model(**overrides: str) -> str:
         "provider_server_id": "'00000000-0000-0000-0000-000000000001'",
         "remote_process_id": "'p1'",
         "owner_sub": "'owner'",
-        "full_name": """'{"de": "Modell"}'""",
+        "full_name": """'{"en": "Model"}'""",
     }
     cols.update(overrides)
     return (
@@ -100,7 +100,7 @@ def test_exec_state_is_generated_from_status(migrated):
     rows = _run(
         *SEED,
         _model(),
-        "UPDATE registry.model SET status = 'rejected', purpose = '{\"de\": \"x\"}', "
+        "UPDATE registry.model SET status = 'rejected', purpose = '{\"en\": \"x\"}', "
         "license = 'MIT'",
         "SELECT exec_state FROM registry.model",
     )
@@ -112,7 +112,7 @@ def test_published_model_appears_in_providers_view(migrated):
         *SEED,
         _model(
             status="'published'",
-            purpose="""'{"de": "Zweck"}'""",
+            purpose="""'{"en": "Purpose"}'""",
             license="'MIT'",
             verified_by="'verifier'",
             verified_interface_sha256=f"'{SHA}'",
@@ -129,11 +129,11 @@ def test_published_model_appears_in_providers_view(migrated):
         # four-eyes: owner may not verify own model
         _model(verified_by="'owner'"),
         # full_name must contain default_lang
-        _model(full_name="""'{"en": "Model"}'"""),
+        _model(full_name="""'{"de": "Modell"}'"""),
         # card must be complete before review
         _model(status="'in_review'"),
         # published models must carry a verified interface
-        _model(status="'published'", purpose="""'{"de": "x"}'""", license="'MIT'"),
+        _model(status="'published'", purpose="""'{"en": "x"}'""", license="'MIT'"),
         # credentials present iff auth_type <> NoAuth
         "INSERT INTO registry.provider_server (name, base_url, auth_type) "
         "VALUES ('srv2', 'http://x', 'ApiKey')",

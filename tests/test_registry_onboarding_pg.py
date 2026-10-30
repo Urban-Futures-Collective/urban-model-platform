@@ -107,7 +107,8 @@ def database():
     command.upgrade(cfg, "head")
     yield
     _sql(
-        "TRUNCATE registry.model, registry.provider_server, registry.app_user, "
+        "TRUNCATE registry.access_request, "
+        "registry.model, registry.provider_server, registry.app_user, "
         "registry.audit_log"
     )
 
@@ -127,7 +128,8 @@ def _sql(query: str):
 
 def test_onboarding_flow_on_real_adapters(database):
     _sql(
-        "TRUNCATE registry.model, registry.provider_server, registry.app_user, "
+        "TRUNCATE registry.access_request, "
+        "registry.model, registry.provider_server, registry.app_user, "
         "registry.audit_log"
     )
     engine = create_async_engine(DB_URL)

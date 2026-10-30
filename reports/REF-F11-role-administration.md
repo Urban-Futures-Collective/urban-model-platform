@@ -1,4 +1,4 @@
-_Last_updated: 2026-09-26
+_Last_updated: 2026-10-29
 
 # Notes for the assistant
 
@@ -37,9 +37,12 @@ grants and no visibility level; it only reads roles from the token.
 - `platform-admin`: listing, creating and deactivating user accounts; assigning and removing
   the six platform roles.
 - `access-admin`: granting and revoking model access (`{provider}`, `{provider}:{process}`),
-  per user or per group; the access-matrix UI behind the existing `/admin` route.
+  per user or per group; the access-matrix UI behind the existing `/admin` route;
+  deciding **access requests** (F12 phase E1).
 
-**Out of scope (UMP):** nothing. This feature requires **no change to UMP**. It is listed
+**Out of scope (UMP):** role writes. This feature needs **no Keycloak connection in UMP**.
+The one UMP part is F12 phase E1: UMP stores access *requests* and the record of their
+decisions (`registry.access_request`), never the grant itself. It is listed
 here because it decides a boundary of UMP's architecture — namely that UMP keeps no IdP
 write path — and because the role *vocabulary* it administers is defined by UMP: the
 model-access roles by `AuthorizationService`, the platform roles by the model registry
@@ -215,7 +218,14 @@ server/api/admin/access/roles.get.ts        list model-access roles
 server/api/admin/access/grants.get.ts       matrix for one user/group (or one role)
 server/api/admin/access/grants.post.ts      grant   { principal, roleName }
 server/api/admin/access/grants.delete.ts    revoke  { principal, roleName }
-server/api/admin/access/sync-roles.post.ts  create missing model-access roles (reconciler)
+server/api/admin/access/sync-roles.post.ts  create missing model-access roles (reconciler);
+                                            close `granted` request records whose role is
+                                            gone (F12 E1)
+server/api/admin/access/requests/[id]/grant.post.ts
+                                            map {provider}:{process} in Keycloak, then
+                                            record `granted` in UMP (admin's token)
+server/api/admin/access/requests/[id]/revoke.post.ts
+                                            unmap in Keycloak, then record `revoked`
 
 # verifier — publish wrapper (F12, D8)
 server/api/registry/models/[id]/publish.post.ts
@@ -230,6 +240,27 @@ server/api/admin/platform/users.patch.ts    enable / disable account
 server/api/admin/platform/roles.post.ts     assign platform role { userId, roleName }
 server/api/admin/platform/roles.delete.ts   remove platform role { userId, roleName }
 ```
+
+### Access requests (F12 phase E1)
+
+Users request access in UMP (`POST /registry/v1/models/{id}/access-requests`); the queue is
+read from UMP (`GET /registry/v1/access-requests`) through the normal `/ump/**` proxy with
+the admin's token. Only steps that change Keycloak go through Nitro, and always in this
+order — **Keycloak first, then UMP**:
+
+| Step | Route | Keycloak | UMP (admin's token) |
+|---|---|---|---|
+| Grant a request | `requests/[id]/grant.post.ts` | map `{provider}:{process}` (existing mapping = ok) | `POST /access-requests/{id}/transitions {to_status: granted}` |
+| Revoke a recorded grant | `requests/[id]/revoke.post.ts` | unmap | `… {to_status: revoked, note}` |
+| Grant from the matrix (single model, single user) | `grants.post.ts` | map | `POST /models/{id}/access-grants {user: {sub, email, name}}` |
+| Revoke from the matrix | `grants.delete.ts` | unmap | if an open `granted` record exists for (user, model): `… {to_status: revoked, note}` |
+| Deny / withdraw | — (direct via `/ump/**`) | — | `… {to_status: denied \| withdrawn}` |
+
+The role name is **derived from the request's model**, never taken from the client, and
+must pass the model-access allowlist like every other access route. Provider-wide and group
+grants are not recorded in UMP. A failed UMP call after a successful Keycloak call leaves
+the record behind, not the access; the UI retries, and the reconciler repairs what remains.
+UMP mails the people concerned for every recorded step (F12 E2).
 
 `app/middleware/admin.ts` is client-side route middleware: it hides the UI, it does not
 protect an endpoint. Protection is server-side only, per route group.
@@ -273,8 +304,9 @@ these Nitro routes instead of a UMP endpoint.
   provider role name *is* the `name:` key. `scripts/convert_providers_yaml.py` preserves the
   v2 mapping key as `name` for exactly this reason. Once the model registry (F12) owns
   provider servers, `provider_server.name` is immutable for the same reason.
-- **Audit trail lives in Keycloak.** Grants, revokes and account changes never pass through
-  UMP, so UMP's audit log (F12) cannot record them. Enable **Admin events** for the realm
+- **Audit trail lives in Keycloak.** Grants, revokes and account changes are never made by
+  UMP, so UMP's audit log (F12) cannot record them — except grants and revokes that go
+  through the access-request flow (F12 E1), which UMP records with the human admin as actor. Enable **Admin events** for the realm
   (Realm settings → Events → Admin events, *Include representation* on) and set a retention
   period. The events record the service account as actor, not the human admin — so each
   Nitro admin route must also log the calling user's `sub` alongside the Keycloak call
@@ -295,25 +327,28 @@ these Nitro routes instead of a UMP endpoint.
    automatically.
 4. **Where does "human admin" get recorded?** See the audit caveat: Keycloak admin events
    show the service account only. A server log is the minimum; a dedicated audit sink is the
-   alternative.
+   alternative. *Partly resolved 2026-10-29:* single-model grants and revokes made through
+   the access-request flow or the matrix are recorded in UMP's audit log (F12 E1, D15);
+   group, provider-wide and platform-role changes still are not.
 
 ## Files to create / modify
 
-All in `ump-x-frontend`; **no UMP files change**.
+All in `ump-x-frontend`. The UMP side of access requests is in F12 (phase E1).
 
 | File | Action | Notes |
 |---|---|---|
 | `server/utils/keycloakAdmin.ts` | CREATE | Service-account token fetch + cache; typed Admin-API wrapper |
 | `server/utils/requireRole.ts` | CREATE | Server-side check for `access-admin` / `platform-admin`, one helper per route group |
 | `server/utils/roleVocabulary.ts` | CREATE | Platform-role constant + model-access vocabulary from `GET /v1.0/processes`; the allowlists |
-| `server/api/admin/access/*.ts` | CREATE | The five `access-admin` operations above |
+| `server/api/admin/access/*.ts` | CREATE | The `access-admin` operations above |
 | `server/api/admin/platform/*.ts` | CREATE | The five `platform-admin` operations above |
-| `server/api/admin/access/sync-roles.post.ts` | CREATE | Reconciler: registry vocabulary vs. Keycloak realm roles |
+| `server/api/admin/access/sync-roles.post.ts` | CREATE | Reconciler: registry vocabulary vs. Keycloak realm roles; closes stale `granted` request records (F12 E1) |
+| `server/api/admin/access/requests/[id]/{grant,revoke}.post.ts` | CREATE | Keycloak first, then record the decision in UMP (F12 E1) |
 | `server/api/registry/models/[id]/publish.post.ts` | CREATE | Publish wrapper that creates the model-access roles (F12, D8) |
 | `app/middleware/admin.ts` | MODIFY | Gate on `access-admin` OR `platform-admin` instead of `ump_admin` |
 | `app/composables/useUmpRoles.ts` | MODIFY | Expose `isAccessAdmin` / `isPlatformAdmin`; drop `ADMIN_ROLE = ump_admin` |
 | `app/composables/useUmpAccess.ts` | CREATE | Client-side facade (replaces the planned mock adapter) |
-| `app/pages/admin/index.vue` | MODIFY | Replace the placeholder with two tabs: access matrix (`access-admin`), accounts & platform roles (`platform-admin`) |
+| `app/pages/admin/index.vue` | MODIFY | Replace the placeholder with tabs: access requests + access matrix (`access-admin`), accounts & platform roles (`platform-admin`) |
 | `nuxt.config.ts` | MODIFY | `runtimeConfig` entries for the admin client id/secret (server-only) |
 | `.env.example` | MODIFY | `NUXT_KEYCLOAK_ADMIN_CLIENT_ID` / `_SECRET`, admin base URL |
 | `docs/model-access-admin-decision-de.md` | MODIFY | Note that decision 1 (Option B) is superseded by this document |

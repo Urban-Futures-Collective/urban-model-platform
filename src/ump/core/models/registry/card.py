@@ -217,3 +217,32 @@ class ReverifyRequest(_Shape):
 
 class OwnerTransfer(_Shape):
     owner_sub: str = Field(min_length=1)
+
+
+# --- access requests (phase E1) -------------------------------------------
+
+
+class AccessRequestCreate(_Shape):
+    note: str | None = Field(default=None, max_length=4000)  # the reason
+
+
+class GrantedUser(_Shape):
+    """The account a direct grant is for, as UMP-X knows it from Keycloak.
+
+    Stored in app_user only if UMP has never seen the user; the token's claims
+    replace it on their next login.
+    """
+
+    sub: str = Field(min_length=1)
+    email: str | None = None
+    name: str | None = None
+
+
+class AccessGrantCreate(_Shape):
+    user: GrantedUser
+    note: str | None = Field(default=None, max_length=4000)
+
+
+class AccessTransitionRequest(_Shape):
+    to_status: str
+    note: str | None = Field(default=None, max_length=4000)
