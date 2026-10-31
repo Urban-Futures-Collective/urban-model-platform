@@ -15,6 +15,7 @@
 --
 -- Design rules (see REF-F12 "Simplification")
 --   * Roles and access live in Keycloak only (D2). No grants, no visibility.
+--     access_request (0004) records requests and decisions, never grants (D15).
 --   * Descriptive model-card parts that are only displayed, never joined or
 --     filtered (contributors, literature, applications, test cases,
 --     requirements, I/O notes, execution config) are JSONB documents,
@@ -270,3 +271,58 @@ CREATE TRIGGER trg_provider_server_notify
 CREATE TRIGGER trg_model_notify
     AFTER INSERT OR UPDATE OR DELETE OR TRUNCATE ON registry.model
     FOR EACH STATEMENT EXECUTE FUNCTION registry.notify_providers_changed();
+
+
+-- =============================================================================
+-- Migration 0004 — access requests (phase E1, D15)
+-- =============================================================================
+
+-- access_request — workflow record only. The grant is the Keycloak role
+-- {provider}:{process}, mapped by UMP-X before the decision is recorded here.
+-- One row per lifecycle; step history is in audit_log. Closed rows are deleted
+-- after 3 months by ump-retention (D16).
+CREATE TABLE registry.access_request (
+    id                 uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_sub           text        NOT NULL REFERENCES registry.app_user(sub),
+    model_id           uuid        NOT NULL REFERENCES registry.model(id),
+    status             text        NOT NULL DEFAULT 'requested'
+                       CHECK (status IN ('requested','granted','denied','withdrawn','revoked')),
+    request_note       text,
+    status_note        text,
+    status_changed_by  text,
+    status_changed_at  timestamptz NOT NULL DEFAULT now(),
+    created_at         timestamptz NOT NULL DEFAULT now(),
+    updated_at         timestamptz NOT NULL DEFAULT now(),
+    CHECK (status NOT IN ('granted','denied') OR status_changed_by IS DISTINCT FROM user_sub),
+    CHECK (status NOT IN ('denied','revoked') OR status_note IS NOT NULL)
+);
+CREATE UNIQUE INDEX uq_access_request_open ON registry.access_request(user_sub, model_id)
+    WHERE status IN ('requested','granted');
+CREATE INDEX idx_access_request_queue ON registry.access_request(status, created_at);
+CREATE INDEX idx_access_request_model ON registry.access_request(model_id);
+
+-- =============================================================================
+-- Migration 0005 — email notifications (phase E2, D14)
+-- The audit log is the outbox: a dispatcher reads audit_log rows after the
+-- cursor and mails the people concerned. The audit guard forbids UPDATE, so
+-- delivery state is this single-row cursor rather than a flag per audit row.
+-- =============================================================================
+CREATE TABLE registry.notification_cursor (
+    id                smallint    PRIMARY KEY CHECK (id = 1),
+    last_audit_id     bigint      NOT NULL,   -- highest audit_log.id fully processed
+    failing_audit_id  bigint,                 -- event currently being retried
+    attempts          integer     NOT NULL DEFAULT 0,
+    updated_at        timestamptz NOT NULL DEFAULT now()
+);
+-- Existing history is never mailed.
+INSERT INTO registry.notification_cursor (id, last_audit_id)
+SELECT 1, coalesce(max(id), 0) FROM registry.audit_log;
+
+-- platform_roles: cache of the six platform roles from the last token, used
+-- only to find recipients ("all verifiers"); authorization reads the token.
+ALTER TABLE registry.app_user
+    ADD COLUMN platform_roles text[] NOT NULL DEFAULT '{}',
+    ADD COLUMN lang           text,
+    ADD COLUMN notify         jsonb  NOT NULL DEFAULT '{}'::jsonb
+        CHECK (jsonb_typeof(notify) = 'object');
+CREATE INDEX idx_app_user_platform_roles ON registry.app_user USING gin (platform_roles);

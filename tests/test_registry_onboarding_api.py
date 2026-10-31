@@ -14,6 +14,7 @@ import pytest
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 
+from ump.adapters.audit_log_inmemory import InMemoryAuditLog
 from ump.adapters.colon_process_id_validator import ColonProcessId
 from ump.adapters.credential_cipher_fernet import FernetCredentialCipher
 from ump.adapters.job_repository_inmemory import InMemoryJobRepository
@@ -183,6 +184,7 @@ def _setup(with_cipher: bool = True, auth: bool = True):
             languages=["de", "en"],
             public_catalogue=True,
             jobs=InMemoryJobRepository("scratch/test_registry_jobs"),
+            audit_log=InMemoryAuditLog(),
         ),
     )
     return TestClient(app), repo, fetch, providers, cipher

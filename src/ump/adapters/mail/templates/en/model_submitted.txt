@@ -1,0 +1,12 @@
+{% block subject %}Review requested: {{ model.name }}{% endblock %}
+{% block body %}
+{% include "en/_greeting.txt" %}
+
+the model "{{ model.name }}" ({{ model.process_id }}) was submitted for review.
+{% if frontend_base_url %}
+
+Review: {{ frontend_base_url }}/verify/{{ model.id }}
+{% endif %}
+
+{% include "en/_footer.txt" %}
+{% endblock %}

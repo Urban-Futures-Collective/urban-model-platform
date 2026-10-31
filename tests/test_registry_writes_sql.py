@@ -14,8 +14,14 @@ import pytest_asyncio
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from ump.adapters.audit_log_sql import SQLAuditLog
 from ump.adapters.registry_repository_sql import SQLModelRegistryRepository
-from ump.core.interfaces.model_registry import RegistryConflictError, StaleWriteError
+from ump.core.interfaces.audit_log import AuditQuery
+from ump.core.interfaces.model_registry import (
+    InterfaceCheck,
+    RegistryConflictError,
+    StaleWriteError,
+)
 from ump.core.models.registry import AppUser, ProviderServer, RegistryModel
 from ump.core.models.registry.audit import AuditEvent
 
@@ -48,7 +54,8 @@ async def db(migrated):
             # TRUNCATE does not fire the row-level audit guard
             await conn.execute(
                 text(
-                    "TRUNCATE registry.model, registry.provider_server, "
+                    "TRUNCATE registry.access_request, "
+                    "registry.model, registry.provider_server, "
                     "registry.app_user, registry.audit_log"
                 )
             )
@@ -87,7 +94,7 @@ def _model(server: ProviderServer, pid: str, slug: str | None = None) -> Registr
         provider_server_id=server.id,
         remote_process_id=pid,
         owner_sub="owner",
-        full_name={"de": pid},
+        full_name={"en": pid},
     )
 
 
@@ -205,3 +212,85 @@ async def test_audit_row_content(db):
     assert row.model_id == draft.id
     assert row.outcome == "success" and row.details == {"slug": "srv-p1"}
     assert row.request_id == "rid-2" and row.occurred_at is not None
+
+
+@pytest.mark.asyncio
+async def test_interface_checks_keep_the_etag_and_skip_reverified_models(db):
+    repo, audit_actions = db
+    server = await repo.create_provider_server(
+        ProviderServer(name="srv", base_url="https://srv/"),
+        audit=_event("server.create"),
+    )
+    sha = "a" * 64
+    verified, unverified = await repo.create_models(
+        [
+            _model(server, "p1").model_copy(
+                update={
+                    "verified_interface": {"inputs": {}},
+                    "verified_interface_sha256": sha,
+                    "current_interface_sha256": sha,
+                    "interface_state": "in_sync",
+                }
+            ),
+            _model(server, "p2"),
+        ],
+        audit=[_event("model.create")],
+    )
+
+    def check(model, expected, state, audit=None):
+        return InterfaceCheck(
+            model_id=model.id,
+            expected_verified_sha256=expected,
+            interface_state=state,
+            current_interface_sha256="b" * 64,
+            last_checked_at=verified.created_at,
+            audit=audit,
+        )
+
+    applied = await repo.record_interface_checks(
+        [
+            check(verified, sha, "drifted", _event("model.interface.drifted")),
+            check(unverified, None, "in_sync"),  # NULL matches NULL
+            check(verified, "c" * 64, "in_sync", _event("never.stored")),  # stale
+        ],
+        audit=[_event("server.rediscover")],
+    )
+    assert applied == {verified.id, unverified.id}
+    stored = await repo.get_model_by_id(verified.id)
+    assert stored.interface_state == "drifted"
+    assert stored.current_interface_sha256 == "b" * 64
+    assert stored.updated_at == verified.updated_at  # ETag unchanged
+    assert (await repo.get_model_by_id(unverified.id)).interface_state == "in_sync"
+    assert await audit_actions() == [
+        "server.create",
+        "model.create",
+        "server.rediscover",
+        "model.interface.drifted",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_sql_audit_log_append_and_filters(db):
+    repo, _ = db
+    log = SQLAuditLog(repo._session_factory)
+    await log.append(AuditEvent(actor_sub="u-1", action="job.execute", job_id="job-1"))
+    await log.append(
+        AuditEvent(
+            actor_sub="u-1", action="job.complete", job_id="job-1", outcome="failure"
+        )
+    )
+    await log.append(AuditEvent(actor_sub="u-2", action="job.execute", job_id="j2"))
+
+    newest_first = await log.list_events(AuditQuery(actor_sub="u-1"))
+    assert [r.action for r in newest_first] == ["job.complete", "job.execute"]
+    assert newest_first[0].outcome == "failure"
+    assert newest_first[0].occurred_at is not None
+
+    (only,) = await log.list_events(AuditQuery(action="job.execute", job_id="j2"))
+    assert only.actor_sub == "u-2"
+
+    page = await log.list_events(
+        AuditQuery(before_id=newest_first[0].id, actor_sub="u-1")
+    )
+    assert [r.action for r in page] == ["job.execute"]
+    assert await log.list_events(AuditQuery(since=only.occurred_at, limit=1)) == [only]

@@ -31,19 +31,27 @@ from ump.adapters.site_info_static_adapter import StaticSiteInfoAdapter
 from ump.adapters.web.fastapi import create_app
 from ump.adapters.web.registry_router import RegistryServices
 from ump.core.config import JobManagerConfig
+from ump.core.interfaces.audit_log import AuditLogPort
 from ump.core.interfaces.credential_cipher import CredentialCipherPort
 from ump.core.interfaces.job_repository import JobRepositoryPort
 from ump.core.interfaces.model_registry import ModelRegistryPort
+from ump.core.interfaces.poll_lock import PollLockPort
 from ump.core.interfaces.providers import ProvidersPort
 from ump.core.logging_config import configure_logging
 from ump.core.managers.job_manager import JobManager
 from ump.core.managers.observers import (
+    AuditObserver,
     PollingSchedulerObserver,
     ResultsVerificationObserver,
     StatusHistoryObserver,
 )
 from ump.core.managers.process_manager import ProcessManager
 from ump.core.services.authorization import AuthorizationService
+from ump.core.services.interface_drift import InterfaceCheckScheduler
+from ump.core.services.notifications import (
+    NotificationDispatcher,
+    NotificationScheduler,
+)
 from ump.core.services.tool_catalog import ToolCatalogService
 from ump.core.settings import app_settings, set_logger
 
@@ -96,6 +104,27 @@ def build_credential_cipher() -> CredentialCipherPort | None:
     return FernetCredentialCipher(key.get_secret_value().split(","))
 
 
+def build_mailer():
+    """MailerPort for UMP_MAIL_BACKEND (None: notifications off)."""
+    if app_settings.UMP_MAIL_BACKEND == "smtp":
+        from ump.adapters.mail.smtp_mailer import SmtpMailer
+
+        password = app_settings.UMP_SMTP_PASSWORD
+        return SmtpMailer(
+            host=app_settings.UMP_SMTP_HOST,
+            port=app_settings.UMP_SMTP_PORT,
+            sender=app_settings.UMP_MAIL_FROM,
+            security=app_settings.UMP_SMTP_SECURITY,
+            user=app_settings.UMP_SMTP_USER,
+            password=password.get_secret_value() if password else None,
+        )
+    if app_settings.UMP_MAIL_BACKEND == "log":
+        from ump.adapters.mail.log_mailer import LogMailer
+
+        return LogMailer()
+    return None
+
+
 def _process_manager_factory(client):
     return ProcessManager(
         providers_port,
@@ -136,6 +165,7 @@ def _job_manager_factory(client, process_manager):
         StatusHistoryObserver(repository=job_repo),
         PollingSchedulerObserver(schedule_callback=jm._schedule_poll),
         ResultsVerificationObserver(http_client=client),
+        AuditObserver(audit_log=audit_log),
     ]
     process_manager.attach_job_manager(jm)
     return jm
@@ -193,19 +223,31 @@ else:
 # ---------------------------------------------------------------------------
 
 
-# Model registry: SQL when a database is configured, else in memory (dev only).
+# Model registry and audit log: SQL when a database is configured, else in
+# memory (dev only).
+# One lock instance for the registry's single-worker tasks (drift check,
+# notifications); each task uses its own key.
+registry_lock: PollLockPort
 if engine is not None:
     from sqlalchemy.ext.asyncio import async_sessionmaker
 
+    from ump.adapters.audit_log_sql import SQLAuditLog
+    from ump.adapters.poll_lock_pg import PgAdvisoryPollLock
     from ump.adapters.registry_repository_sql import SQLModelRegistryRepository
 
-    registry_repo: ModelRegistryPort = SQLModelRegistryRepository(
-        async_sessionmaker(engine, expire_on_commit=False)
-    )
+    _registry_sessions = async_sessionmaker(engine, expire_on_commit=False)
+    registry_repo: ModelRegistryPort = SQLModelRegistryRepository(_registry_sessions)
+    audit_log: AuditLogPort = SQLAuditLog(_registry_sessions)
+    # one worker runs each registry task, whatever the job store
+    registry_lock = PgAdvisoryPollLock(_registry_sessions)
 else:
+    from ump.adapters.audit_log_inmemory import InMemoryAuditLog
     from ump.adapters.registry_repository_inmemory import InMemoryRegistryRepository
 
-    registry_repo = InMemoryRegistryRepository()
+    _memory_audit = InMemoryAuditLog()
+    audit_log = _memory_audit
+    registry_repo = InMemoryRegistryRepository(audit_log=_memory_audit)
+    registry_lock = NoOpPollLock()
 
 registry_services = RegistryServices.create(
     registry_repo,
@@ -222,7 +264,39 @@ registry_services = RegistryServices.create(
     languages=app_settings.UMP_REGISTRY_LANGUAGES,
     public_catalogue=app_settings.UMP_PUBLIC_PROCESSES,
     jobs=job_repo,
+    audit_log=audit_log,
 )
+
+if app_settings.UMP_INTERFACE_CHECK_INTERVAL_SECONDS > 0:
+    lifecycle.append(
+        InterfaceCheckScheduler(
+            registry_services.drift,
+            lock=registry_lock,
+            interval=app_settings.UMP_INTERFACE_CHECK_INTERVAL_SECONDS,
+        )
+    )
+
+mailer = build_mailer()
+if mailer is not None and app_settings.UMP_NOTIFY_INTERVAL_SECONDS > 0:
+    from ump.adapters.mail.jinja_renderer import JinjaNotificationRenderer
+
+    lifecycle.append(
+        NotificationScheduler(
+            NotificationDispatcher(
+                audit_log,
+                registry_repo,
+                JinjaNotificationRenderer(app_settings.UMP_REGISTRY_LANGUAGES),
+                mailer,
+                languages=app_settings.UMP_REGISTRY_LANGUAGES,
+                fallback_admin_emails=app_settings.UMP_NOTIFY_FALLBACK_ADMIN_EMAILS,
+                frontend_base_url=app_settings.UMP_FRONTEND_BASE_URL,
+                settle_seconds=app_settings.UMP_NOTIFY_SETTLE_SECONDS,
+                max_attempts=app_settings.UMP_NOTIFY_MAX_ATTEMPTS,
+            ),
+            lock=registry_lock,
+            interval=app_settings.UMP_NOTIFY_INTERVAL_SECONDS,
+        )
+    )
 
 app = create_app(
     process_manager_factory=_process_manager_factory,

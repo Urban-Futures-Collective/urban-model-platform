@@ -2,16 +2,18 @@
 
 Same two-model pattern as job_repository_sql.py:
   - Core domain models: ump.core.models.registry (pure Pydantic, no ORM)
-  - Adapter ORM models: AppUserRecord / ProviderServerRecord / ModelRecord
+  - Adapter ORM models: AppUserRecord / ProviderServerRecord / ModelRecord /
+    AccessRequestRecord
 
-The tables are created by migration 0003. ``exec_state`` is a generated column
+The tables are created by migrations 0003 and 0004. ``exec_state`` is a generated column
 and not mapped (the core derives it, see ``exec_state_for``). Columns with
 database defaults (timestamps) are left out of INSERTs when the domain value is
 None, and every write returns the stored row.
 
 Every write and its audit row run in one transaction. Updates are conditional
-on ``updated_at`` (optimistic concurrency) and set it to ``now()``. A unique
-violation becomes ``RegistryConflictError``.
+on ``updated_at`` (optimistic concurrency) and set it to ``now()`` — except
+drift-check results, which are conditional on the verified hash and leave
+``updated_at`` alone. A unique violation becomes ``RegistryConflictError``.
 
 The session factory is injected by the composition root.
 """
@@ -22,25 +24,45 @@ from datetime import datetime
 from typing import Any, Optional
 from uuid import UUID
 
-from sqlalchemy import Column, DateTime, LargeBinary, Text, func, or_, update
+from sqlalchemy import (
+    Column,
+    DateTime,
+    LargeBinary,
+    Text,
+    func,
+    or_,
+    tuple_,
+    update,
+)
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlmodel import Field, SQLModel, select
 
+from ump.adapters.audit_log_sql import AUDIT, audit_values
 from ump.core.interfaces.model_registry import (
+    AccessQuery,
+    InterfaceCheck,
     ModelQuery,
     ModelRegistryPort,
     RegistryConflictError,
     StaleWriteError,
 )
 from ump.core.models.registry import AppUser, ProviderServer, RegistryModel
+from ump.core.models.registry.access import AccessRequest
 from ump.core.models.registry.audit import AuditEvent
 
 SCHEMA = "registry"
 
 # Columns whose value the database supplies when the domain model has none.
-_DB_DEFAULTED = {"first_seen_at", "last_seen_at", "created_at", "updated_at"}
+_DB_DEFAULTED = {
+    "first_seen_at",
+    "last_seen_at",
+    "created_at",
+    "updated_at",
+    "status_changed_at",
+    "platform_roles",
+}
 
 
 def _tz(nullable: bool = True) -> Any:
@@ -70,6 +92,11 @@ class AppUserRecord(SQLModel, table=True):
     email: Optional[str] = None
     first_seen_at: Optional[datetime] = _tz()
     last_seen_at: Optional[datetime] = _tz()
+    platform_roles: list = Field(
+        default=None, sa_column=Column(ARRAY(Text), nullable=False)
+    )
+    lang: Optional[str] = None
+    notify: dict = _jsonb()
 
 
 class ProviderServerRecord(SQLModel, table=True):
@@ -134,28 +161,23 @@ class ModelRecord(SQLModel, table=True):
     updated_at: Optional[datetime] = _tz()
 
 
-class AuditLogRecord(SQLModel, table=True):
-    """Append-only; ``id`` and ``occurred_at`` come from the database."""
-
-    __tablename__: str = "audit_log"
+class AccessRequestRecord(SQLModel, table=True):
+    __tablename__: str = "access_request"
     __table_args__ = {"schema": SCHEMA}
 
-    id: Optional[int] = Field(default=None, primary_key=True)
-    occurred_at: Optional[datetime] = _tz()
-    actor_sub: Optional[str] = None
-    actor_roles: list = Field(
-        default=None, sa_column=Column(ARRAY(Text), nullable=False)
-    )
-    action: str
-    model_id: Optional[UUID] = None
-    job_id: Optional[str] = None
-    outcome: str
-    details: dict = _jsonb()
-    request_id: Optional[str] = None
+    id: UUID = Field(primary_key=True)
+    user_sub: str
+    model_id: UUID
+    status: str
+    request_note: Optional[str] = None
+    status_note: Optional[str] = None
+    status_changed_by: Optional[str] = None
+    status_changed_at: Optional[datetime] = _tz()
+    created_at: Optional[datetime] = _tz()
+    updated_at: Optional[datetime] = _tz()
 
 
 _USERS = AppUserRecord.__table__
-_AUDIT = AuditLogRecord.__table__
 _UNIQUE_VIOLATION = "23505"
 
 # never rewritten by an update
@@ -169,10 +191,6 @@ _MODEL_IDENTITY = {
 }
 
 
-def _audit_values(event: AuditEvent) -> dict[str, Any]:
-    return event.model_dump(mode="json")
-
-
 def _is_unique_violation(exc: IntegrityError) -> bool:
     code = getattr(exc.orig, "pgcode", None) or getattr(exc.orig, "sqlstate", None)
     return code == _UNIQUE_VIOLATION
@@ -180,6 +198,10 @@ def _is_unique_violation(exc: IntegrityError) -> bool:
 
 _SERVERS = ProviderServerRecord.__table__
 _MODELS = ModelRecord.__table__
+_ACCESS = AccessRequestRecord.__table__
+
+# the only columns a step of the access workflow changes
+_ACCESS_STEP = ("status", "status_note", "status_changed_by", "status_changed_at")
 
 
 def _user(row: Any) -> AppUser:
@@ -192,6 +214,10 @@ def _server(row: Any) -> ProviderServer:
 
 def _model(row: Any) -> RegistryModel:
     return RegistryModel.model_validate(dict(row._mapping))
+
+
+def _access(row: Any) -> AccessRequest:
+    return AccessRequest.model_validate(dict(row._mapping))
 
 
 class SQLModelRegistryRepository(ModelRegistryPort):
@@ -217,7 +243,7 @@ class SQLModelRegistryRepository(ModelRegistryPort):
                     rows = [(await session.execute(stmt)).first() for stmt in stmts]
                     if audits:
                         await session.execute(
-                            insert(_AUDIT), [_audit_values(a) for a in audits]
+                            insert(AUDIT), [audit_values(a) for a in audits]
                         )
                     if any(row is None for row in rows):
                         raise StaleWriteError("row changed or missing")
@@ -231,17 +257,61 @@ class SQLModelRegistryRepository(ModelRegistryPort):
 
     async def upsert_user(self, user: AppUser) -> AppUser:
         values = _insert_values(user)
+        if user.platform_roles is not None:
+            values["platform_roles"] = sorted(user.platform_roles)
         stmt = insert(_USERS).values(**values)
         refreshed = {
             k: stmt.excluded[k]
-            for k in ("display_name", "email")
-            if values.get(k)  # never overwrite a cached claim with nothing
+            for k in ("display_name", "email", "lang", "platform_roles")
+            # never overwrite a cached claim with nothing (an empty role list
+            # is a claim: the user lost their roles)
+            if values.get(k) or (k == "platform_roles" and k in values)
         }
         refreshed["last_seen_at"] = func.now()
         stmt = stmt.on_conflict_do_update(
             index_elements=["sub"], set_=refreshed
         ).returning(*_USERS.c)
         return _user(await self._one(stmt, commit=True))
+
+    async def ensure_user(self, user: AppUser) -> AppUser:
+        inserted = await self._one(
+            insert(_USERS)
+            .values(**_insert_values(user))
+            .on_conflict_do_nothing(index_elements=["sub"])
+            .returning(*_USERS.c),
+            commit=True,
+        )
+        if inserted is None:  # known already: keep the row as it is
+            inserted = await self._one(
+                select(*_USERS.c).where(_USERS.c.sub == user.sub)
+            )
+        return _user(inserted)
+
+    async def get_users(self, subs: set[str]) -> dict[str, AppUser]:
+        if not subs:
+            return {}
+        rows = await self._all(select(*_USERS.c).where(_USERS.c.sub.in_(subs)))
+        return {u.sub: u for u in map(_user, rows)}
+
+    async def list_users_with_role(self, role: str) -> list[AppUser]:
+        rows = await self._all(
+            select(*_USERS.c)
+            .where(_USERS.c.platform_roles.any(role))
+            .order_by(_USERS.c.sub)
+        )
+        return [_user(r) for r in rows]
+
+    async def set_notify(self, sub: str, notify: dict[str, bool]) -> AppUser:
+        row = await self._one(
+            update(_USERS)
+            .where(_USERS.c.sub == sub)
+            .values(notify=notify)
+            .returning(*_USERS.c),
+            commit=True,
+        )
+        if row is None:
+            raise KeyError(sub)
+        return _user(row)
 
     # --- provider servers -------------------------------------------------
 
@@ -364,3 +434,86 @@ class SQLModelRegistryRepository(ModelRegistryPort):
         )
         (row,) = await self._write([stmt], [audit])
         return _model(row)
+
+    async def record_interface_checks(
+        self, checks: list[InterfaceCheck], *, audit: list[AuditEvent] = ()
+    ) -> set[UUID]:
+        # one transaction, so the providers NOTIFY trigger fires once per run
+        applied: set[UUID] = set()
+        events = list(audit)
+        async with self._session_factory() as session:
+            async with session.begin():
+                for check in checks:
+                    stmt = (
+                        update(_MODELS)
+                        .where(
+                            _MODELS.c.id == check.model_id,
+                            _MODELS.c.verified_interface_sha256.is_not_distinct_from(
+                                check.expected_verified_sha256
+                            ),
+                        )
+                        .values(
+                            interface_state=check.interface_state,
+                            current_interface_sha256=check.current_interface_sha256,
+                            last_checked_at=check.last_checked_at,
+                        )
+                        .returning(_MODELS.c.id)
+                    )
+                    if (await session.execute(stmt)).first() is None:
+                        continue
+                    applied.add(check.model_id)
+                    if check.audit is not None:
+                        events.append(check.audit)
+                if events:
+                    await session.execute(
+                        insert(AUDIT), [audit_values(e) for e in events]
+                    )
+        return applied
+
+    # --- access requests --------------------------------------------------
+
+    async def get_access_request(self, request_id: UUID) -> AccessRequest | None:
+        row = await self._one(select(*_ACCESS.c).where(_ACCESS.c.id == request_id))
+        return _access(row) if row else None
+
+    async def list_access_requests(self, query: AccessQuery) -> list[AccessRequest]:
+        c = _ACCESS.c
+        stmt = select(*c).order_by(c.created_at.desc(), c.id.desc()).limit(query.limit)
+        if query.visible_to is not None:
+            owned = select(_MODELS.c.id).where(_MODELS.c.owner_sub == query.visible_to)
+            stmt = stmt.where(
+                or_(c.user_sub == query.visible_to, c.model_id.in_(owned))
+            )
+        if query.status is not None:
+            stmt = stmt.where(c.status == query.status)
+        if query.model_id is not None:
+            stmt = stmt.where(c.model_id == query.model_id)
+        if query.user_sub is not None:
+            stmt = stmt.where(c.user_sub == query.user_sub)
+        if query.before is not None:
+            stmt = stmt.where(tuple_(c.created_at, c.id) < tuple_(*query.before))
+        return [_access(r) for r in await self._all(stmt)]
+
+    async def create_access_request(
+        self, request: AccessRequest, *, audit: AuditEvent
+    ) -> AccessRequest:
+        stmt = insert(_ACCESS).values(**_insert_values(request)).returning(*_ACCESS.c)
+        (row,) = await self._write([stmt], [audit])
+        return _access(row)
+
+    async def update_access_request(
+        self, request: AccessRequest, *, expected_updated_at, audit: AuditEvent
+    ) -> AccessRequest:
+        stmt = (
+            update(_ACCESS)
+            .where(
+                _ACCESS.c.id == request.id,
+                _ACCESS.c.updated_at == expected_updated_at,
+            )
+            .values(
+                **request.model_dump(include=set(_ACCESS_STEP)), updated_at=func.now()
+            )
+            .returning(*_ACCESS.c)
+        )
+        (row,) = await self._write([stmt], [audit])
+        return _access(row)

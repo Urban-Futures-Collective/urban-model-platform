@@ -52,7 +52,8 @@ async def sql_repo(migrated):
         async with engine.begin() as conn:
             await conn.execute(
                 text(
-                    "TRUNCATE registry.model, registry.provider_server, "
+                    "TRUNCATE registry.access_request, "
+                    "registry.model, registry.provider_server, "
                     "registry.app_user"
                 )
             )
@@ -81,8 +82,8 @@ def _models(srv_a: ProviderServer, srv_b: ProviderServer) -> list[RegistryModel]
                 provider_server_id=server.id,
                 remote_process_id=pid,
                 owner_sub=owner,
-                full_name={"de": pid},
-                purpose={"de": "x"},
+                full_name={"en": pid},
+                purpose={"en": "x"},
                 license="MIT",
                 status=status,
                 published_at=T0 if status in ("published", "deactivated") else None,

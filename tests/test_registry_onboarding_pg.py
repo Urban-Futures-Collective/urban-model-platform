@@ -22,6 +22,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from ump.adapters.audit_log_inmemory import InMemoryAuditLog
 from ump.adapters.colon_process_id_validator import ColonProcessId
 from ump.adapters.credential_cipher_fernet import FernetCredentialCipher
 from ump.adapters.job_repository_inmemory import InMemoryJobRepository
@@ -106,7 +107,8 @@ def database():
     command.upgrade(cfg, "head")
     yield
     _sql(
-        "TRUNCATE registry.model, registry.provider_server, registry.app_user, "
+        "TRUNCATE registry.access_request, "
+        "registry.model, registry.provider_server, registry.app_user, "
         "registry.audit_log"
     )
 
@@ -126,7 +128,8 @@ def _sql(query: str):
 
 def test_onboarding_flow_on_real_adapters(database):
     _sql(
-        "TRUNCATE registry.model, registry.provider_server, registry.app_user, "
+        "TRUNCATE registry.access_request, "
+        "registry.model, registry.provider_server, registry.app_user, "
         "registry.audit_log"
     )
     engine = create_async_engine(DB_URL)
@@ -174,6 +177,7 @@ def test_onboarding_flow_on_real_adapters(database):
             languages=["de", "en"],
             public_catalogue=False,
             jobs=jobs,
+            audit_log=InMemoryAuditLog(),
         ),
     )
     headers = {"Authorization": "Bearer owner"}

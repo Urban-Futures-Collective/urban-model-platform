@@ -1,0 +1,1 @@
+Hallo{% if recipient_name %} {{ recipient_name }}{% endif %},
