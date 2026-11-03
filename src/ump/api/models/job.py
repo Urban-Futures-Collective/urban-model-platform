@@ -220,13 +220,15 @@ class Job:
         query = """
       SELECT j.* FROM jobs j left join jobs_users u on j.job_id = u.job_id WHERE j.job_id = %(job_id)s
     """
+        query_params = {"job_id": job_id}
         if user is None:
             query += " and j.user_id is null"
         else:
-            query += f" and (j.user_id = '{user}' or u.user_id = '{user}')"
+            query += " and (j.user_id = %(user_id)s or u.user_id = %(user_id)s)"
+            query_params["user_id"] = user
 
         with DBHandler() as db:
-            job_details = db.run_query(query, query_params={"job_id": job_id})
+            job_details = db.run_query(query, query_params=query_params)
 
         if len(job_details) > 0:
             self._init_from_dict(dict(job_details[0]))
