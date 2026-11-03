@@ -5,6 +5,12 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.html).
 
 # [2.x]
+## [Unreleased]
+### Fixed:
+- `GET /jobs` no longer lists all anonymous jobs to unauthenticated callers; it returns an empty list without a login. Anonymous jobs remain reachable by their job ID (#24)
+- `GET /jobs` applies `processID` and `status` filters to the user's own jobs, no longer returns duplicate entries for shared jobs, and reports a correct `total_count`
+- job queries use bound parameters instead of string interpolation for the user ID
+
 ## [2.1.0] - 2025-07-31
 ### Changed:
 - improved error handling when requesting remote servers processes and jobs

@@ -1,14 +1,12 @@
-import re
-
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ump import utils
 from ump.api.db_handler import DBHandler
 from ump.api.db_handler import db_engine as engine
+from ump.api.job_queries import build_job_filter
 from ump.api.models.ensemble import Ensemble, JobsEnsembles
 from ump.api.models.job import Job
-from ump.api.models.job_status import JobStatus
 from ump.config import app_settings
 
 def append_ensemble_list(job):
@@ -24,47 +22,23 @@ def append_ensemble_list(job):
         for ensemble in ensembles:
             job['ensembles'].append(ensemble.to_dict())
 
-def get_jobs(args, user = None):
+def get_jobs(args, auth_token=None):
+    """List the jobs the authenticated user owns or that were shared with them.
+
+    Anonymous callers get an empty list (see issue #24): anonymous jobs are
+    not tied to a session, so listing them would expose every anonymous job
+    to everyone. They remain reachable by their job ID.
+    """
     page  = int(args["page"][0]) if "page" in args else 1
     limit = int(args["limit"][0]) if "limit" in args else None
 
+    if auth_token is None:
+        return {"jobs": [], "links": [], "total_count": 0}
+
+    user = auth_token["sub"]
     jobs = []
-    query = """
-      SELECT j.job_id FROM jobs j left join jobs_users u on j.job_id = u.job_id
-    """
-    query_params = {}
-    conditions = []
-    user = None if user is None else user['sub']
-    if user is not None:
-        conditions.append(f"j.user_id = '{user}' or u.user_id = '{user}'")
-    else:
-        conditions.append('j.user_id is null')
-
-    if 'processID' in args and args['processID']:
-        # this processID is actually the process_id_with_prefix!!!
-        # we cannot change the name because it would not be OGC processes compliant anymore
-        process_ids = []
-
-        for process_id_with_prefix in args['processID']:
-            match = re.search(r'(.*):(.*)', process_id_with_prefix)
-            provider_prefix = match.group(1)
-            process_ids.append(match.group(2))
-
-        conditions.append("process_id IN %(process_id)s")
-        query_params['process_id'] = tuple(process_ids)
-
-        conditions.append("provider_prefix = %(provider_prefix)s")
-        query_params['provider_prefix'] = provider_prefix
-
-    if 'status' in args:
-        query_params['status'] = tuple(args['status'])
-
-    else:
-        query_params['status'] = (
-            JobStatus.running.value, JobStatus.successful.value,
-            JobStatus.failed.value, JobStatus.dismissed.value
-        )
-    conditions.append("status IN %(status)s")
+    query = "SELECT j.job_id FROM jobs j"
+    conditions, query_params = build_job_filter(args, user)
 
     with DBHandler() as db:
         db.set_sortable_columns(Job.SORTABLE_COLUMNS)
@@ -120,9 +94,7 @@ def next_links(page, limit, count_jobs):
     return links
 
 def count(conditions, query_params):
-    count_query = """
-      SELECT count(*) FROM jobs j left join jobs_users u on j.job_id = u.job_id
-    """
+    count_query = "SELECT count(*) FROM jobs j"
     with DBHandler() as db:
         count_jobs = db.run_query(
             count_query,
