@@ -29,12 +29,11 @@ def get_jobs(args, auth_token=None):
     not tied to a session, so listing them would expose every anonymous job
     to everyone. They remain reachable by their job ID.
     """
-    page  = int(args["page"][0]) if "page" in args else 1
-    limit = int(args["limit"][0]) if "limit" in args else None
-
     if auth_token is None:
         return {"jobs": [], "links": [], "total_count": 0}
 
+    page  = int(args["page"][0]) if "page" in args else 1
+    limit = int(args["limit"][0]) if "limit" in args else None
     user = auth_token["sub"]
     jobs = []
     query = "SELECT j.job_id FROM jobs j"

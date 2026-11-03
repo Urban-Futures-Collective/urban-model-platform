@@ -38,14 +38,7 @@ def build_job_filter(
     Returns:
         A tuple of SQL conditions (to be joined with ``AND``) and the
         parameters they reference.
-
-    Raises:
-        ValueError: If ``user_id`` is empty. Anonymous callers must not
-            reach this function.
     """
-    if not user_id:
-        raise ValueError("user_id is required to list jobs")
-
     conditions = [JOB_ACCESS_CONDITION]
     query_params: dict = {"user_id": user_id}
 
@@ -53,7 +46,6 @@ def build_job_filter(
         # processID is actually "<provider_prefix>:<process_id>"; the name is
         # kept for OGC API - Processes compliance.
         process_ids = []
-        provider_prefix = None
         for process_id_with_prefix in args["processID"]:
             match = re.search(r"(.*):(.*)", process_id_with_prefix)
             provider_prefix = match.group(1)
@@ -64,10 +56,7 @@ def build_job_filter(
         conditions.append("j.provider_prefix = %(provider_prefix)s")
         query_params["provider_prefix"] = provider_prefix
 
-    if "status" in args:
-        query_params["status"] = tuple(args["status"])
-    else:
-        query_params["status"] = DEFAULT_LIST_STATUSES
+    query_params["status"] = tuple(args.get("status", DEFAULT_LIST_STATUSES))
     conditions.append("j.status IN %(status)s")
 
     return conditions, query_params

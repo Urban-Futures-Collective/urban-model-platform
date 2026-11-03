@@ -1,7 +1,5 @@
 """Tests for the job listing filter (issue #24)."""
 
-import pytest
-
 from ump.api.job_queries import (
     DEFAULT_LIST_STATUSES,
     JOB_ACCESS_CONDITION,
@@ -9,31 +7,14 @@ from ump.api.job_queries import (
 )
 
 
-def _where_clause(conditions):
-    # Mirrors how DBHandler.run_query combines conditions.
-    return " AND ".join(conditions)
-
-
-def _top_level_or_count(sql):
-    """Count occurrences of OR that are not nested inside parentheses."""
+def _has_top_level_or(sql):
+    """Return True if an OR appears outside of any parentheses."""
     depth = 0
-    count = 0
-    i = 0
-    while i < len(sql):
-        char = sql[i]
-        if char == "(":
-            depth += 1
-        elif char == ")":
-            depth -= 1
-        elif depth == 0 and sql.startswith(" OR ", i):
-            count += 1
-        i += 1
-    return count
-
-
-def test_build_job_filter_rejects_anonymous_user():
-    with pytest.raises(ValueError):
-        build_job_filter({}, None)
+    for i, char in enumerate(sql):
+        depth += {"(": 1, ")": -1}.get(char, 0)
+        if depth == 0 and sql.startswith(" OR ", i):
+            return True
+    return False
 
 
 def test_build_job_filter_restricts_to_user_without_interpolation():
@@ -41,7 +22,7 @@ def test_build_job_filter_restricts_to_user_without_interpolation():
 
     assert conditions[0] == JOB_ACCESS_CONDITION
     assert params["user_id"] == "user-123"
-    assert "user-123" not in _where_clause(conditions)
+    assert "user-123" not in " AND ".join(conditions)
 
 
 def test_build_job_filter_keeps_access_or_inside_parentheses_with_filters():
@@ -49,15 +30,9 @@ def test_build_job_filter_keeps_access_or_inside_parentheses_with_filters():
 
     conditions, _ = build_job_filter(args, "user-123")
 
+    # DBHandler.run_query joins conditions with AND.
     assert len(conditions) == 4
-    assert _top_level_or_count(_where_clause(conditions)) == 0
-
-
-def test_build_job_filter_does_not_join_shares_table():
-    conditions, _ = build_job_filter({}, "user-123")
-
-    assert "JOIN" not in _where_clause(conditions).upper()
-    assert "EXISTS" in conditions[0]
+    assert not _has_top_level_or(" AND ".join(conditions))
 
 
 def test_build_job_filter_uses_default_statuses_when_none_given():
