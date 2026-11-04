@@ -51,8 +51,13 @@ services:
       UMP_JWT_ROLES_CLAIMS: realm_access.roles,resource_access.ump-client.roles
       UMP_JWKS_CACHE_TTL_SECONDS: 3600
       UMP_PUBLIC_PROCESSES: true
-      # Fernet key(s) for model-server credentials; taken from the shell or .env
-      # (left unset when missing there)
+      # Fernet key(s) encrypting model-server credentials, comma-separated.
+      # Deliberately listed WITHOUT a value instead of ${UMP_REGISTRY_CREDENTIALS_KEY}
+      # or ${UMP_REGISTRY_CREDENTIALS_KEY:-}: Compose then takes the value from the
+      # shell or .env and leaves the variable unset in the container when it is
+      # missing there. An interpolated empty string would instead reach the app as
+      # SecretStr("") rather than None, Fernet("") would raise, and the API would
+      # fail at startup even on deployments that do not use the model registry.
       UMP_REGISTRY_CREDENTIALS_KEY:
     volumes:
       - ./providers.yaml:/app/providers.yaml

@@ -80,9 +80,12 @@ services:
 
       # ── Model registry ────────────────────────────────────────────────────
       # Fernet key(s) encrypting model-server credentials, comma-separated.
-      # Listed without a value on purpose: Compose takes it from the shell or
-      # .env and leaves it unset in the container when it is missing there.
-      # (An empty string would make the app fail at startup.)
+      # Deliberately listed WITHOUT a value instead of ${UMP_REGISTRY_CREDENTIALS_KEY}
+      # or ${UMP_REGISTRY_CREDENTIALS_KEY:-}: Compose then takes the value from the
+      # shell or .env and leaves the variable unset in the container when it is
+      # missing there. An interpolated empty string would instead reach the app as
+      # SecretStr("") rather than None, Fernet("") would raise, and the API would
+      # fail at startup even on deployments that do not use the model registry.
       UMP_REGISTRY_CREDENTIALS_KEY:
     volumes:
       - ../files/providers.yaml:/home/pythonuser/providers.yaml
