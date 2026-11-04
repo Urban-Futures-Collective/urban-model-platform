@@ -296,7 +296,7 @@ def test_me_and_notification_settings():
         ("en", "published", "was reset to review"),
         ("en", "deactivated", "was reactivated and is back in review"),
         ("de", "submitted", "ist jetzt in Prüfung"),
-        ("de", "published", "wurde zur erneuten Prüfung zurückgesetzt"),
+        ("de", "published", "ist erneut in Prüfung"),
         ("de", "deactivated", "wurde reaktiviert und ist wieder in Prüfung"),
     ],
 )
