@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.html).
 # [3.x]
+## [Unreleased]
+### Fixed:
+- `GET /jobs` no longer lists anonymous jobs while auth is enabled: unauthenticated callers get an empty list, authenticated users only their own jobs. Anonymous jobs remain reachable by their job ID (#24)
+
 - complete refactoring 
 
 # [2.x]
