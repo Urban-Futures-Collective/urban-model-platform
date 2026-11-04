@@ -83,6 +83,8 @@ def test_graph_matches_the_spec():
         ("in_review", "deactivated"),
         ("verified", "deactivated"),
         ("published", "deactivated"),
+        ("deactivated", "in_review"),
+        ("rejected", "draft"),
     }
 
 
@@ -188,3 +190,34 @@ def test_bypass_keeps_four_eyes():
             None,
             require_verification_job=False,
         )
+
+
+# --- no dead ends: reactivate and reopen ------------------------------------
+
+
+def test_reactivation_is_for_verifiers_and_admins_with_a_note():
+    for caller in (VERIFIER, ADMIN, OWNER_VERIFIER):
+        check_transition(_model("deactivated"), "in_review", caller, "fixed", None)
+    for caller in (OWNER, STRANGER, ANON):
+        with pytest.raises(TransitionForbidden):
+            check_transition(_model("deactivated"), "in_review", caller, "x", None)
+    with pytest.raises(TransitionError) as excinfo:
+        check_transition(_model("deactivated"), "in_review", VERIFIER, None, None)
+    assert excinfo.value.status == 400
+
+
+def test_reactivation_goes_back_to_review_only():
+    for to in ("published", "verified", "draft", "submitted"):
+        with pytest.raises(TransitionError):
+            check_transition(_model("deactivated"), to, VERIFIER, "n", None)
+
+
+def test_reopening_a_rejected_model_is_for_its_owner():
+    check_transition(_model("rejected"), "draft", OWNER, None, None)
+    for caller in (VERIFIER, ADMIN, STRANGER, ANON):
+        with pytest.raises(TransitionForbidden):
+            check_transition(_model("rejected"), "draft", caller, None, None)
+    # a rejected model goes back to the owner, not straight into review again
+    for to in ("submitted", "in_review", "published"):
+        with pytest.raises(TransitionError):
+            check_transition(_model("rejected"), to, OWNER, "n", None)

@@ -511,3 +511,87 @@ def test_bypass_reverifies_without_a_job():
         audit = env.repo.audit[-1]
         assert audit.action == "model.reverify"
         assert audit.details["verification_job_skipped"] is True
+
+
+# --- no dead ends: reactivate and reopen ------------------------------------
+
+
+def _publish(client, env, job_id="job-1"):
+    _to_review(client, env)
+    env.job(job_id, ago=0)
+    assert (
+        _step(client, env, "verifier", "verified", verification_job_id=job_id)
+    ).status_code == 200
+    assert _step(client, env, "verifier", "published").status_code == 200
+
+
+def _edit_card(client, env, who, patch):
+    path = f"/registry/v1/models/{env.model.id}"
+    headers = {"Authorization": f"Bearer {who}"}
+    etag = client.get(path, headers=headers).headers["ETag"]
+    return client.patch(path, headers={**headers, "If-Match": etag}, json=patch)
+
+
+def test_deactivated_model_is_reactivated_into_a_new_review_round():
+    env = Env()
+    with TestClient(env.app) as client:
+        _publish(client, env, "job-1")
+        _step(client, env, "admin", "deactivated", note="server down")
+        assert env.stored().exec_state == "deactivated"
+        assert _edit_card(client, env, "owner", {"license": "MIT"}).status_code == 409
+
+        assert _step(client, env, "verifier", "in_review").status_code == 400  # note
+        reloads = env.providers.reloads
+        reactivated = _step(client, env, "admin", "in_review", note="server back")
+        assert reactivated.status_code == 200, reactivated.text
+        model = env.stored()
+        assert model.status == "in_review" and model.exec_state == "in_review"
+        assert env.providers.reloads == reloads + 1  # verifiers may run it again
+        assert env.repo.audit[-1].details["from"] == "deactivated"
+
+        # the card is editable again
+        assert _edit_card(client, env, "owner", {"license": "MIT"}).status_code == 200
+
+        # the old verification run belongs to the previous round
+        stale = _step(client, env, "verifier", "verified", verification_job_id="job-1")
+        assert stale.status_code == 400
+        assert "before the current review round" in stale.json()["detail"]
+
+        env.job("job-2")
+        assert (
+            _step(client, env, "verifier", "verified", verification_job_id="job-2")
+        ).status_code == 200
+        assert _step(client, env, "verifier", "published").status_code == 200
+        assert env.stored().exec_state == "published"
+
+
+def test_owner_cannot_reactivate_their_model():
+    env = Env()
+    with TestClient(env.app) as client:
+        _publish(client, env)
+        _step(client, env, "admin", "deactivated", note="broken")
+        response = _step(client, env, "owner", "in_review", note="please")
+        assert response.status_code == 403
+        assert env.stored().status == "deactivated"
+
+
+def test_rejected_model_is_reopened_by_its_owner_and_resubmitted():
+    env = Env()
+    with TestClient(env.app) as client:
+        _to_review(client, env)
+        _step(client, env, "verifier", "rejected", note="no license info")
+        assert env.stored().exec_state == "deactivated"
+        assert _step(client, env, "verifier", "draft").status_code == 403
+
+        reloads = env.providers.reloads
+        assert _step(client, env, "owner", "draft").status_code == 200
+        model = env.stored()
+        assert model.status == "draft" and model.exec_state is None
+        assert env.providers.reloads == reloads + 1  # leaves the snapshot
+
+        # a draft may change its execution settings again
+        edited = _edit_card(
+            client, env, "owner", {"process_config": {"anonymous-access": True}}
+        )
+        assert edited.status_code == 200, edited.text
+        assert _step(client, env, "owner", "submitted").status_code == 200
