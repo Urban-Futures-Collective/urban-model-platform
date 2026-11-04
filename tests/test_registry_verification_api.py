@@ -595,3 +595,21 @@ def test_rejected_model_is_reopened_by_its_owner_and_resubmitted():
         )
         assert edited.status_code == 200, edited.text
         assert _step(client, env, "owner", "submitted").status_code == 200
+
+
+# --- GET /registry/v1/settings -------------------------------------------------
+
+
+@pytest.mark.parametrize("required", [True, False])
+def test_settings_tell_the_frontend_about_the_deployment(required):
+    env = Env(require_verification_job=required)
+    with TestClient(env.app) as client:
+        response = client.get("/registry/v1/settings")  # no token: readable pre-login
+        assert response.status_code == 200
+        assert response.json() == {
+            "languages": ["en", "de"],
+            "default_language": "en",
+            "public_catalogue": True,
+            "verification_job_required": required,
+        }
+        assert response.headers["Cache-Control"] == "public, max-age=300"
