@@ -23,6 +23,39 @@ services:
       PYTHONUNBUFFERED: 1
       UMP_LOG_LEVEL: DEBUG
       UMP_PROVIDERS_FILE: /app/providers.yaml
+      # ── Providers / model registry ────────────────────────────────────────
+      # "file" serves providers.yaml; "db" the model registry (seed it with
+      # scripts/seed_registry_dev.sql after `ump-migrate upgrade head`).
+      UMP_PROVIDERS_SOURCE: ${UMP_PROVIDERS_SOURCE:-file}
+      UMP_PROVIDERS_DB_POLL_INTERVAL: ${UMP_PROVIDERS_DB_POLL_INTERVAL:-30}
+      # JSON list syntax, e.g. ["en","de"]
+      UMP_REGISTRY_LANGUAGES: '${UMP_REGISTRY_LANGUAGES:-["en","de"]}'
+      # Outbound safety for user-supplied model-server URLs: https only unless
+      # ALLOW_HTTP; private/loopback addresses only for the listed hosts
+      # (e.g. ["modelserver"] for in-network model servers).
+      UMP_REGISTRY_ALLOW_HTTP: ${UMP_REGISTRY_ALLOW_HTTP:-false}
+      UMP_REGISTRY_ALLOWED_PRIVATE_HOSTS: ${UMP_REGISTRY_ALLOWED_PRIVATE_HOSTS:-[]}
+      UMP_INTERFACE_CHECK_INTERVAL_SECONDS: ${UMP_INTERFACE_CHECK_INTERVAL_SECONDS:-3600}
+
+      # ── Email notifications ───────────────────────────────────────────────
+      # none | log (mails go to the log) | smtp
+      UMP_MAIL_BACKEND: ${UMP_MAIL_BACKEND:-none}
+      UMP_MAIL_FROM: ${UMP_MAIL_FROM:-Urban Model Platform <noreply@example.org>}
+      UMP_SMTP_HOST: ${UMP_SMTP_HOST:-localhost}
+      UMP_SMTP_PORT: ${UMP_SMTP_PORT:-587}
+      UMP_SMTP_SECURITY: ${UMP_SMTP_SECURITY:-starttls}
+      # Optional settings (default None) are listed WITHOUT a value instead of
+      # ${VAR:-}: Compose takes them from the shell or .env and leaves them unset
+      # in the container when missing, so they stay None. ${VAR:-} would inject
+      # "" instead; the current code happens to treat "" like None here, but not
+      # for every optional setting (see UMP_REGISTRY_CREDENTIALS_KEY).
+      UMP_SMTP_USER:
+      UMP_SMTP_PASSWORD:
+      UMP_FRONTEND_BASE_URL:
+      UMP_NOTIFY_INTERVAL_SECONDS: ${UMP_NOTIFY_INTERVAL_SECONDS:-30}
+      UMP_NOTIFY_SETTLE_SECONDS: ${UMP_NOTIFY_SETTLE_SECONDS:-5}
+      UMP_NOTIFY_MAX_ATTEMPTS: ${UMP_NOTIFY_MAX_ATTEMPTS:-10}
+      UMP_NOTIFY_FALLBACK_ADMIN_EMAILS: ${UMP_NOTIFY_FALLBACK_ADMIN_EMAILS:-[]}
       UMP_API_SERVER_URL: "http://localhost:8000/"
       UMP_API_SERVER_URL_PREFIX: "/"
       UMP_API_SERVER_HOST: "0.0.0.0"
