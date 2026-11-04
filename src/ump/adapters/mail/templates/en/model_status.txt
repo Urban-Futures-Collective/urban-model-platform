@@ -1,5 +1,7 @@
 {% set what = {
-  "in_review": "is now in review" if from == "submitted" else "was reset to review",
+  "in_review": "is now in review" if from == "submitted"
+    else "was reactivated and is back in review" if from == "deactivated"
+    else "was reset to review",
   "changes_requested": "needs changes",
   "rejected": "was rejected",
   "verified": "was verified",

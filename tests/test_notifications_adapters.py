@@ -40,6 +40,7 @@ PARAMS = {
             ("in_review", "verified"),
             ("verified", "published"),
             ("published", "deactivated"),
+            ("deactivated", "in_review"),
         )
     ],
     "model_reverified": [{"note": None}],
@@ -286,3 +287,21 @@ def test_me_and_notification_settings():
     assert exc.value.response.status == 400
     with pytest.raises(OGCProcessException):
         asyncio.run(accounts.set_notifications(AuthContext(None, [], False), {}))
+
+
+@pytest.mark.parametrize(
+    "lang, frm, phrase",
+    [
+        ("en", "submitted", "is now in review"),
+        ("en", "published", "was reset to review"),
+        ("en", "deactivated", "was reactivated and is back in review"),
+        ("de", "submitted", "ist jetzt in Prüfung"),
+        ("de", "published", "ist erneut in Prüfung"),
+        ("de", "deactivated", "wurde reaktiviert und ist wieder in Prüfung"),
+    ],
+)
+def test_back_in_review_says_why(lang, frm, phrase):
+    renderer = JinjaNotificationRenderer(["en", "de"])
+    params = {**BASE, "model": MODEL, "from": frm, "to": "in_review", "note": None}
+    mail = renderer.render("model_status", lang, params)
+    assert phrase in mail.subject and phrase in mail.text

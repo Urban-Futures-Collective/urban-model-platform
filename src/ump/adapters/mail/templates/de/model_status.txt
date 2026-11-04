@@ -1,5 +1,7 @@
 {% set what = {
-  "in_review": "ist jetzt in Prüfung" if from == "submitted" else "wurde zur erneuten Prüfung zurückgesetzt",
+  "in_review": "ist jetzt in Prüfung" if from == "submitted"
+    else "wurde reaktiviert und ist wieder in Prüfung" if from == "deactivated"
+    else "ist erneut in Prüfung",
   "changes_requested": "benötigt Änderungen",
   "rejected": "wurde abgelehnt",
   "verified": "wurde verifiziert",

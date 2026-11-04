@@ -134,7 +134,7 @@ def plan(
         frm, to = details.get("from"), details.get("to")
         if to == "submitted":
             return [PlannedMail("model_submitted", "review", (verifiers,))]
-        if to == "draft":  # submission withdrawn before anyone picked it up
+        if to == "draft":  # withdrawn or reopened by the owner: nobody to tell
             return []
         return [
             PlannedMail(
