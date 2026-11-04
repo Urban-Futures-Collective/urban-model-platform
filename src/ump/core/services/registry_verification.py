@@ -12,6 +12,11 @@ review round began (after the last verification for ``reverify``). Then the
 current raw process description is fetched and stored as the verified
 interface, together with its hash.
 
+``require_verification_job=False`` (``UMP_REGISTRY_REQUIRE_VERIFICATION_JOB``) is a
+development bypass: ``verified`` and ``reverify`` then go without a job. A job that
+is named anyway is still checked; four-eyes, the complete card and the stored
+interface stay mandatory. Skipped checks are marked in the audit details.
+
 Every change is audited; steps that can change what the OGC endpoints see
 reload the provider snapshot.
 """
@@ -68,8 +73,10 @@ class RegistryVerificationService:
         remote_auth: RemoteAuthPort,
         cipher: CredentialCipherPort | None,
         clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
+        require_verification_job: bool = True,
     ) -> None:
         self._registry = registry
+        self._require_job = require_verification_job
         self._jobs = jobs
         self._catalog = catalog
         self._authz = authorization
@@ -91,7 +98,12 @@ class RegistryVerificationService:
         model, server = await self._load(auth, model_id, if_match)
         try:
             check_transition(
-                model, body.to_status, auth, body.note, body.verification_job_id
+                model,
+                body.to_status,
+                auth,
+                body.note,
+                body.verification_job_id,
+                require_verification_job=self._require_job,
             )
         except TransitionForbidden as exc:
             raise problem(403, "Forbidden", str(exc))
@@ -107,13 +119,14 @@ class RegistryVerificationService:
             "status_changed_at": now,
         }
         if body.to_status == "verified":
-            await self._check_job(
-                auth,
-                model,
-                server,
-                body.verification_job_id,
-                since=model.status_changed_at,
-            )
+            if body.verification_job_id is not None:
+                await self._check_job(
+                    auth,
+                    model,
+                    server,
+                    body.verification_job_id,
+                    since=model.status_changed_at,
+                )
             changes.update(
                 await self._verification(auth, server, model, body.verification_job_id)
             )
@@ -121,20 +134,20 @@ class RegistryVerificationService:
             # first publication: the model-access roles exist from now on (D8)
             changes["published_at"] = now
 
+        details: dict[str, Any] = {
+            "from": model.status,
+            "to": body.to_status,
+            "note": body.note,
+            "verification_job_id": body.verification_job_id,
+        }
+        if body.to_status == "verified" and body.verification_job_id is None:
+            details["verification_job_skipped"] = True
         updated = model.model_copy(update=changes)
         await self._store(
             model,
             updated,
             AuditEvent.by(
-                auth,
-                "model.status.change",
-                model_id=model.id,
-                details={
-                    "from": model.status,
-                    "to": body.to_status,
-                    "note": body.note,
-                    "verification_job_id": body.verification_job_id,
-                },
+                auth, "model.status.change", model_id=model.id, details=details
             ),
         )
         if model.exec_state != updated.exec_state:
@@ -159,9 +172,14 @@ class RegistryVerificationService:
                 "Forbidden",
                 "Re-verification is for a verifier who is not the owner.",
             )
-        await self._check_job(
-            auth, model, server, body.verification_job_id, since=model.verified_at
-        )
+        if body.verification_job_id is not None:
+            await self._check_job(
+                auth, model, server, body.verification_job_id, since=model.verified_at
+            )
+        elif self._require_job:
+            raise problem(
+                400, "Bad Request", "Re-verification needs the verification_job_id."
+            )
         changes = await self._verification(
             auth, server, model, body.verification_job_id
         )
@@ -180,6 +198,11 @@ class RegistryVerificationService:
                     "previous_sha256": model.verified_interface_sha256,
                     "sha256": updated.verified_interface_sha256,
                     "note": body.note,
+                    **(
+                        {"verification_job_skipped": True}
+                        if body.verification_job_id is None
+                        else {}
+                    ),
                 },
             ),
         )

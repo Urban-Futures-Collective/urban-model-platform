@@ -85,8 +85,14 @@ def check_transition(
     auth: AuthContext,
     note: str | None,
     verification_job_id: str | None,
+    require_verification_job: bool = True,
 ) -> Step:
-    """The step for ``model.status → to_status`` if *auth* may take it now."""
+    """The step for ``model.status → to_status`` if *auth* may take it now.
+
+    ``require_verification_job=False`` (``UMP_REGISTRY_REQUIRE_VERIFICATION_JOB``,
+    dev only) lets ``verified`` go without a verification run; a job id that is
+    given is still accepted there and only there.
+    """
     step = TRANSITIONS.get((model.status, to_status))
     if step is None:
         allowed = sorted(to for (frm, to) in TRANSITIONS if frm == model.status)
@@ -103,7 +109,11 @@ def check_transition(
         raise TransitionForbidden(f"'{model.status}' → '{to_status}' is for {who}.")
     if step.needs_note and not (note and note.strip()):
         raise TransitionError(f"'{to_status}' needs a note explaining why.", 400)
-    if step.needs_verification_job and not verification_job_id:
+    if (
+        step.needs_verification_job
+        and require_verification_job
+        and not verification_job_id
+    ):
         raise TransitionError(
             "'verified' needs the verification_job_id of your run.", 400
         )
