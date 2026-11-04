@@ -207,11 +207,13 @@ class ModelCardPatch(_Shape):
 class TransitionRequest(_Shape):
     to_status: str
     note: str | None = Field(default=None, max_length=4000)
-    verification_job_id: str | None = None  # required for 'verified'
+    # required for 'verified' unless UMP_REGISTRY_REQUIRE_VERIFICATION_JOB=false
+    verification_job_id: str | None = None
 
 
 class ReverifyRequest(_Shape):
-    verification_job_id: str
+    # required unless UMP_REGISTRY_REQUIRE_VERIFICATION_JOB=false
+    verification_job_id: str | None = None
     note: str | None = Field(default=None, max_length=4000)
 
 

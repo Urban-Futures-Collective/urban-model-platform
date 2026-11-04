@@ -324,7 +324,8 @@ listed only for callers holding `verifier`, independent of `UMP_PUBLIC_PROCESSES
 
 Verification runs are ordinary jobs. The verifier links the job in
 `model.verification_job_id`; the audit log records the run with the role snapshot showing
-`verifier`.
+`verifier`. In development the run can be skipped (`UMP_REGISTRY_REQUIRE_VERIFICATION_JOB`,
+see phase C).
 
 ## Publishing and Keycloak roles
 
@@ -1020,6 +1021,13 @@ need the guarded resolver in `AioHttpClientAdapter` too.
   `verification_job_id` that exists in UMP's job store, was started by the verifier, ran
   this model (`{provider}:{process}`), finished `successful`, and was started after the
   current review round began (after the last verification, for `reverify`).
+- **Development bypass (decided 2026-11-04):** `UMP_REGISTRY_REQUIRE_VERIFICATION_JOB=false`
+  (default `true`) makes the job optional for `verified` and `reverify`, so models can be
+  taken through the workflow locally without a runnable model server. A job that is named
+  is still checked. Unchanged: four-eyes, the complete card, the fetched and hashed
+  `verified_interface` (drift detection keeps working). The audit details carry
+  `verification_job_skipped: true`; the composition root logs a warning at startup. Both
+  compose files pass it with default `true`.
 - On `verified` / `reverify` the current raw description is fetched through `SafeFetchPort`
   **in the model's default language** (the hash is defined on that response) and stored as
   `verified_interface` + hash; `interface_state = in_sync`.
