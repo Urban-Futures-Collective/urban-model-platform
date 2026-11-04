@@ -1026,8 +1026,8 @@ need the guarded resolver in `AioHttpClientAdapter` too.
   taken through the workflow locally without a runnable model server. A job that is named
   is still checked. Unchanged: four-eyes, the complete card, the fetched and hashed
   `verified_interface` (drift detection keeps working). The audit details carry
-  `verification_job_skipped: true`; the composition root logs a warning at startup. The
-  setting is passed only by `docker-compose-dev.yaml`, not by the prod compose file.
+  `verification_job_skipped: true`; the composition root logs a warning at startup. Both
+  compose files pass it with default `true`.
 - On `verified` / `reverify` the current raw description is fetched through `SafeFetchPort`
   **in the model's default language** (the hash is defined on that response) and stored as
   `verified_interface` + hash; `interface_state = in_sync`.
