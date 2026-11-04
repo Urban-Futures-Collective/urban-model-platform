@@ -50,6 +50,8 @@ CATALOGUE = [
      "model_status", "review", (OWNER,)),
     ("model.status.change", {"from": "published", "to": "in_review", "note": "n"},
      "model_status", "review", (OWNER,)),
+    ("model.status.change", {"from": "deactivated", "to": "in_review", "note": "n"},
+     "model_status", "review", (OWNER,)),
     *(
         ("model.status.change", {"from": "in_review", "to": to, "note": "n"},
          "model_status", "review", (OWNER,))
@@ -85,6 +87,7 @@ def test_catalogue(action, details, kind, category, targets):
     "action,details",
     [
         ("model.status.change", {"from": "submitted", "to": "draft"}),  # withdrawn
+        ("model.status.change", {"from": "rejected", "to": "draft"}),  # reopened
         ("access.withdraw", {"user_sub": "u"}),
         ("model.card.update", {}),
         ("model.create", {}),

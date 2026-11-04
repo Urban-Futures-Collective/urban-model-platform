@@ -269,6 +269,7 @@ draft → submitted → in_review → verified → published
             ↑           │ │                    │
             └── changes_requested   rejected    └→ in_review (reset)
 any of in_review / verified / published → deactivated
+deactivated → in_review (reactivate)        rejected → draft (reopen)
 ```
 
 | Transition | Performed by (platform role) |
@@ -277,6 +278,8 @@ any of in_review / verified / published → deactivated
 | `submitted → in_review`, `in_review → verified / changes_requested / rejected` | `verifier`, not the owner |
 | `verified → published`, `published → in_review` (reset) | `verifier`, not the owner |
 | `in_review / verified / published → deactivated` | `verifier` or `platform-admin` |
+| `deactivated → in_review` (reactivate, note required) | `verifier` or `platform-admin` |
+| `rejected → draft` (reopen) | `provider`, owner of the model |
 
 Rules:
 - The transition graph is **domain logic in the core** (`VerificationService`). The
@@ -289,6 +292,16 @@ Rules:
   change the status (see the versioning note in [Simplification](#simplification-what-was-dropped-and-why)).
 - **Re-verification** of a published model (e.g. after drift) updates the `verified_*`
   columns in place; the model stays `published`.
+- **No dead ends (added 2026-11-04).** A model is unique per `(provider_server_id,
+  remote_process_id)` and models are never deleted, so a final `deactivated`/`rejected`
+  would block that process on that server for good. **Reactivation**
+  (`deactivated → in_review`) starts a new review round: the model is runnable by
+  verifiers only (`exec_state = in_review`), the card is editable again, and verifying
+  needs a verification run newer than the reactivation; the previous `verified_*` values
+  stay until then, as after a reset. **Reopening** (`rejected → draft`) hands the model
+  back to its owner, who may rework the card including execution settings and submit
+  again. Both are audited `model.status.change` events; reactivation mails the owner,
+  reopening mails nobody.
 - `status_note` holds the last reviewer comment or rejection/deactivation reason;
   `status_changed_by/at` the last change. The full history is in the audit log.
 - **Publishing and model access:** publishing creates the model-access roles (D8) but does

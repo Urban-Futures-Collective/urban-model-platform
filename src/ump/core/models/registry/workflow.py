@@ -4,12 +4,19 @@
                 ↑           │ │                    │
                 └── changes_requested   rejected    └→ in_review (reset)
     any of in_review / verified / published → deactivated
+    deactivated → in_review (reactivate)        rejected → draft (reopen)
 
 Who may take a step:
 
 - ``owner``: the model's owner, holding ``provider``;
 - ``reviewer``: a ``verifier`` who is **not** the owner (four-eyes, D6/CHECK);
 - ``deactivator``: a ``verifier`` or a ``platform-admin``.
+
+Neither ``deactivated`` nor ``rejected`` is final: a model is unique per server
+and remote process, so a dead end would block that process for good. A
+reactivated model goes through review again (a new round: the verification run
+must be newer than the reactivation); a reopened one is a draft the owner can
+rework and submit again.
 
 The database keeps only the invariants (0003 CHECKs); the graph and the role
 rules live here, because roles are only visible in the token.
@@ -46,6 +53,8 @@ TRANSITIONS: dict[tuple[str, str], Step] = {
     ("in_review", "deactivated"): Step("deactivator", needs_note=True),
     ("verified", "deactivated"): Step("deactivator", needs_note=True),
     ("published", "deactivated"): Step("deactivator", needs_note=True),
+    ("deactivated", "in_review"): Step("deactivator", needs_note=True),  # reactivate
+    ("rejected", "draft"): Step("owner"),  # reopen for rework
 }
 
 # Statuses from which the card must be complete in the default language
