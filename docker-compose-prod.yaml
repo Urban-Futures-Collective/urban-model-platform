@@ -77,6 +77,13 @@ services:
       # CORS headers unless this is set. JSON list syntax, e.g.
       # UMP_CORS_ORIGINS=["https://frontend.example.org"]
       UMP_CORS_ORIGINS: ${UMP_CORS_ORIGINS:-[]}
+
+      # ── Model registry ────────────────────────────────────────────────────
+      # Fernet key(s) encrypting model-server credentials, comma-separated.
+      # Listed without a value on purpose: Compose takes it from the shell or
+      # .env and leaves it unset in the container when it is missing there.
+      # (An empty string would make the app fail at startup.)
+      UMP_REGISTRY_CREDENTIALS_KEY:
     volumes:
       - ../files/providers.yaml:/home/pythonuser/providers.yaml
     networks:
