@@ -24,10 +24,12 @@ from uuid import UUID
 
 from ump.core.exceptions import OGCProcessException
 from ump.core.interfaces.auth import AuthContext
+from ump.core.interfaces.credential_cipher import CredentialCipherPort
 from ump.core.interfaces.model_registry import ModelQuery, ModelRegistryPort
 from ump.core.models.ogcp_exception import OGCExceptionResponse
 from ump.core.models.providers_config import canonical_process_id
-from ump.core.models.registry import RegistryModel, roles
+from ump.core.models.registry import ProviderServer, RegistryModel, roles
+from ump.core.models.registry.credentials import read_credentials
 from ump.core.models.registry.localized import pick_language, resolve
 from ump.core.models.registry.views import (
     ModelCardView,
@@ -82,10 +84,12 @@ class RegistryCatalogService:
         registry: ModelRegistryPort,
         authorization: AuthorizationService,
         public_catalogue: bool,
+        cipher: CredentialCipherPort | None,
     ) -> None:
         self._registry = registry
         self._authz = authorization
         self._public = public_catalogue
+        self._cipher = cipher
 
     # ------------------------------------------------------------------
     # Visibility
@@ -163,7 +167,7 @@ class RegistryCatalogService:
             models=[
                 self._view(
                     m,
-                    servers[m.provider_server_id].name,
+                    servers[m.provider_server_id],
                     auth,
                     languages,
                     owners.get(m.owner_sub),
@@ -189,9 +193,7 @@ class RegistryCatalogService:
             model.provider_server_id
         )
         owners = await self._owner_names([model])
-        return self._view(
-            model, server.name, auth, languages, owners.get(model.owner_sub)
-        )
+        return self._view(model, server, auth, languages, owners.get(model.owner_sub))
 
     async def role_vocabulary(self, auth: AuthContext) -> RoleVocabulary:
         self._authz.require_platform_role(auth, roles.ACCESS_ADMIN, roles.VERIFIER)
@@ -210,7 +212,7 @@ class RegistryCatalogService:
     def _view(
         self,
         model: RegistryModel,
-        server_name: str,
+        server: ProviderServer,
         auth: AuthContext,
         preferences: Sequence[str],
         owner_display_name: str | None = None,
@@ -237,6 +239,8 @@ class RegistryCatalogService:
                 for item in items
             ]
 
+        server_name = server.name
+        sees_review = self._sees_review(auth, model)
         review = (
             ReviewInfo(
                 status_note=model.status_note,
@@ -246,7 +250,12 @@ class RegistryCatalogService:
                 verified_at=model.verified_at,
                 verification_job_id=model.verification_job_id,
             )
-            if self._sees_review(auth, model)
+            if sees_review
+            else None
+        )
+        server_credentials_state = (
+            read_credentials(server.auth_type, server.credentials, self._cipher).state
+            if sees_review
             else None
         )
         return ModelCardView(
@@ -279,6 +288,7 @@ class RegistryCatalogService:
             anonymous_access=bool(model.process_config.get("anonymous-access")),
             exec_state=model.exec_state,
             interface_state=model.interface_state,
+            server_credentials_state=server_credentials_state,
             published_at=model.published_at,
             updated_at=model.updated_at,
             review=review,

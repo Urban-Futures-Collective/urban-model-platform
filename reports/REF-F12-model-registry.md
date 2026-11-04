@@ -1,4 +1,4 @@
-_Last_updated: 2026-10-29
+_Last_updated: 2026-11-04
 
 # Notes for the assistant
 
@@ -431,10 +431,21 @@ ops handled (in `providers.yaml` / Kubernetes secrets).
 - Encryption through a new `CredentialCipherPort`; adapter uses authenticated encryption
   (e.g. Fernet / AES-GCM) with the key from `UMP_REGISTRY_CREDENTIALS_KEY`. A key-id prefix
   in the ciphertext allows rotation.
-- **Write-only API.** Credentials are never returned; responses show only `auth_type` and
-  `credentials_set: true|false`.
+- **Write-only API.** Credentials are never returned; responses show only `auth_type`,
+  `credentials_set: true|false` and `credentials_state` (below).
 - `ProviderConfigDbAdapter` decrypts when building `ProviderConfig.authentication`, which
   already holds `SecretStr`, so `RemoteAuthAdapter` needs no change.
+- **Credentials state (added 2026-11-04).** A server whose credentials UMP cannot use is
+  left out of the providers snapshot, so all its models vanish from `/v1.0/processes` while
+  their cards remain in the registry. To make that visible, one pure core rule,
+  `core/models/registry/credentials.py::read_credentials`, decides for both the snapshot
+  and the API: `not_required` (NoAuth), `ok`, `missing`, `missing_key` (no
+  `UMP_REGISTRY_CREDENTIALS_KEY`), `undecryptable` (key changed) or `invalid` (decrypted,
+  wrong fields). Only `not_required` and `ok` reach the catalogue. Reported as
+  `credentials_state` on server views and as `server_credentials_state` on model cards —
+  the latter only for callers who see `review` (owner, verifiers, platform admins), `null`
+  otherwise. Fix: set the credentials again (`PATCH /servers/{id}`), or add the old key as
+  a further entry of `UMP_REGISTRY_CREDENTIALS_KEY`.
 - Onboarding (`POST`/`PATCH /servers`, phase B) encrypts the credentials it receives.
 
 ## Outbound request safety

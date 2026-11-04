@@ -35,12 +35,11 @@ from ump.core.interfaces.credential_cipher import CredentialCipherPort
 from ump.core.interfaces.providers import ProvidersPort
 from ump.core.models.providers_config import (
     AuthConfig,
-    NoAuthConfig,
     ProcessConfig,
     ProviderConfig,
     ProvidersSnapshot,
-    auth_config_from_secret,
 )
+from ump.core.models.registry.credentials import read_credentials
 
 logger = logging.getLogger(__name__)
 
@@ -138,16 +137,11 @@ class ProviderConfigDbAdapter(ProvidersPort):
         )
 
     def _authentication(self, auth_type: str, credentials: bytes | None) -> AuthConfig:
-        if auth_type == "NoAuth":
-            return NoAuthConfig()
-        if credentials is None:
-            raise ValueError(f"{auth_type} server has no credentials stored")
-        if self._cipher is None:
-            raise ValueError(
-                f"{auth_type} credentials need UMP_REGISTRY_CREDENTIALS_KEY"
-            )
-        secret = json.loads(self._cipher.decrypt(credentials))
-        return auth_config_from_secret(auth_type, secret)
+        # Same rule the registry API reports as credentials_state.
+        stored = read_credentials(auth_type, credentials, self._cipher)
+        if not stored.usable or stored.auth is None:
+            raise ValueError(f"credentials {stored.state}: {stored.detail}")
+        return stored.auth
 
     # ------------------------------------------------------------------
     # Background refresh

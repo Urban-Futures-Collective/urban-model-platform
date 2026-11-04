@@ -116,6 +116,8 @@ Jobs carry a local UUID; remote self/results links are rewritten to local ones
   `db` reads the model registry (schema `registry`, migration 0003) through
   `ProviderConfigDbAdapter`: an in-memory snapshot refreshed via Postgres LISTEN/NOTIFY.
   Model-server credentials are stored Fernet-encrypted (`UMP_REGISTRY_CREDENTIALS_KEY`);
+  a server whose credentials cannot be used is left out of the snapshot (reported as
+  `credentials_state`, rule in `core/models/registry/credentials.py`).
   There is no providers.yaml import; `scripts/seed_registry_dev.sql` seeds the mock server for local
   `db` mode (run it after `ump-migrate upgrade head`).
   Both adapters share the lookup rules in `core/models/providers_config.py::ProvidersSnapshot`.

@@ -98,7 +98,7 @@ class Env:
         authz = AuthorizationService(None)
         self.drift = InterfaceDriftService(
             self.repo,
-            catalog=RegistryCatalogService(self.repo, authz, True),
+            catalog=RegistryCatalogService(self.repo, authz, True, cipher=None),
             authorization=authz,
             fetch=self.server,
             remote_auth=RemoteAuthAdapter(),

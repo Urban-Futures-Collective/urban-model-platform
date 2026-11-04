@@ -84,6 +84,7 @@ class RegistryOnboardingService:
             raise ValueError("at least one registry language is required")
         self._registry = registry
         self._remote = RegistryRemote(fetch, remote_auth, cipher)
+        self._cipher = cipher
         self._authz = authorization
         self._providers = providers
         self._languages = list(languages)
@@ -132,7 +133,7 @@ class RegistryOnboardingService:
             )
         except RegistryConflictError:
             raise problem(409, "Conflict", f"Server name '{body.name}' is taken.")
-        return server_view(stored)
+        return server_view(stored, self._cipher)
 
     async def update_server(
         self,
@@ -157,7 +158,7 @@ class RegistryOnboardingService:
         if "is_active" in sent and patch.is_active is not None:
             changes["is_active"] = patch.is_active
         if not changes:
-            return server_view(server)
+            return server_view(server, self._cipher)
 
         updated = server.model_copy(update=changes)
         details = diff(
@@ -173,7 +174,7 @@ class RegistryOnboardingService:
             updated, server, AuditEvent.by(auth, "server.update", details=details)
         )
         self._providers.load_providers()  # url, auth, ttw, active are in the snapshot
-        return server_view(stored)
+        return server_view(stored, self._cipher)
 
     # ------------------------------------------------------------------
     # Discovery and draft models

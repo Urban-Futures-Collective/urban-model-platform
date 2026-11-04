@@ -98,10 +98,12 @@ class RegistryServices:
         audit_log: AuditLogPort,
     ) -> "RegistryServices":
         """Assemble the core services from injected ports (no adapters built here)."""
-        catalog = RegistryCatalogService(registry, authorization, public_catalogue)
+        catalog = RegistryCatalogService(
+            registry, authorization, public_catalogue, cipher=cipher
+        )
         return cls(
             catalog=catalog,
-            servers=RegistryServerService(registry, authorization),
+            servers=RegistryServerService(registry, authorization, cipher=cipher),
             accounts=RegistryAccountService(registry, languages=languages),
             onboarding=RegistryOnboardingService(
                 registry,

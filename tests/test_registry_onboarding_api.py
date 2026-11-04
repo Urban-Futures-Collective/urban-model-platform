@@ -356,6 +356,73 @@ def test_patch_server_needs_current_etag_and_ownership():
 # --- discovery and drafts -----------------------------------------------------
 
 
+# --- credentials_state ---------------------------------------------------------
+
+
+def _break_credentials(repo, name="bikebox"):
+    """Stored ciphertext the configured key cannot decrypt (key changed)."""
+    server = repo.servers[name]
+    repo.servers[name] = server.model_copy(update={"credentials": b"old-key-data"})
+
+
+def test_server_view_reports_credentials_state():
+    client, repo, *_ = _setup()
+    with client:
+        created = _create_server(client).json()
+        assert created["credentials_state"] == "ok"
+        no_auth = _create_server(
+            client, body={"name": "open", "base_url": "https://open.example.org"}
+        ).json()
+        assert no_auth["credentials_state"] == "not_required"
+
+        _break_credentials(repo)
+        sid = created["id"]
+        view = _call(client, "GET", f"/servers/{sid}", "owner").json()
+        assert view["credentials_state"] == "undecryptable"
+        assert view["credentials_set"] is True
+        listed = _call(client, "GET", "/servers", "admin").json()["servers"]
+        assert {s["name"]: s["credentials_state"] for s in listed} == {
+            "bikebox": "undecryptable",
+            "open": "not_required",
+        }
+
+
+def test_server_view_reports_missing_key():
+    client, repo, *_ = _setup()
+    with client:
+        sid = _create_server(client).json()["id"]
+    # same stored data, served by an instance without UMP_REGISTRY_CREDENTIALS_KEY
+    keyless, keyless_repo, *_ = _setup(with_cipher=False)
+    keyless_repo.servers.update(repo.servers)
+    with keyless:
+        view = _call(keyless, "GET", f"/servers/{sid}", "owner").json()
+        assert view["credentials_state"] == "missing_key"
+
+
+def test_model_card_shows_server_credentials_state_to_reviewers_only():
+    client, repo, *_ = _setup()
+    with client:
+        sid = _create_server(client).json()["id"]
+        model_id = _create_models(client, sid, ids=("growbike",))["created"][0]["id"]
+        path = f"/models/{model_id}"
+
+        owner_view = _call(client, "GET", path, "owner").json()
+        assert owner_view["server_credentials_state"] == "ok"
+
+        _break_credentials(repo)
+        key = next(iter(repo.models))
+        repo.models[key] = repo.models[key].model_copy(update={"status": "published"})
+
+        for who in ("owner", "verifier", "admin"):
+            view = _call(client, "GET", path, who).json()
+            assert view["server_credentials_state"] == "undecryptable", who
+        for who in ("viewer", "other", None):
+            view = _call(client, "GET", path, who).json()
+            assert view["server_credentials_state"] is None, who
+        listed = _call(client, "GET", "/models", "verifier").json()["models"]
+        assert listed[0]["server_credentials_state"] == "undecryptable"
+
+
 def test_discover_lists_processes_with_outbound_credentials():
     client, repo, fetch, _, _ = _setup()
     with client:

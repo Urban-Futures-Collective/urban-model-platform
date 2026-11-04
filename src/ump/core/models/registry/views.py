@@ -65,6 +65,10 @@ class ModelCardView(BaseModel):
     anonymous_access: bool = False
     exec_state: str | None = None
     interface_state: str
+    # credentials_state of the model's server; anything but "not_required"/"ok"
+    # keeps the model out of /v1.0/processes. Shown to those who see ``review``
+    # (owner, verifiers, platform admins), None for everyone else.
+    server_credentials_state: str | None = None
     published_at: datetime | None = None
     updated_at: datetime | None = None
     review: ReviewInfo | None = None
@@ -82,6 +86,10 @@ class ProviderServerView(BaseModel):
     owner_sub: str | None = None
     auth_type: str
     credentials_set: bool
+    # Whether UMP can use the stored credentials (models/registry/credentials.py).
+    # Anything but "not_required"/"ok" keeps the server's models out of
+    # /v1.0/processes, e.g. "missing_key" or "undecryptable" after a key change.
+    credentials_state: str
     ttw_job_done_seconds: float
     is_active: bool
     last_discovered_at: datetime | None = None

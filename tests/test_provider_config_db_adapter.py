@@ -248,6 +248,13 @@ async def test_undecryptable_provider_is_skipped(engine):
 
 
 @pytest.mark.asyncio
+async def test_provider_without_key_is_skipped(engine):
+    # same rule as credentials_state "missing_key" in the registry API
+    async with ProviderConfigDbAdapter(engine, None, poll_interval=3600) as db:
+        assert db.list_providers() == ["mock"]
+
+
+@pytest.mark.asyncio
 async def test_failed_refresh_keeps_previous_snapshot(engine):
     async with ProviderConfigDbAdapter(engine, CIPHER, poll_interval=3600) as db:
         async with engine.begin() as conn:
