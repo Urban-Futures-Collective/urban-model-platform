@@ -372,11 +372,16 @@ def create_app(
     @api_router.get("/jobs", response_model=JobList, response_model_exclude_none=True)
     async def list_jobs(request: Request):
         auth = await _get_auth(request)
-        if not auth.is_authenticated:
+        if app.state.auth_port is None or not app_settings.UMP_AUTH_ENABLED:
+            # auth disabled: every job is anonymous and every caller may list them
             jobs = await app.state.job_repo.list(public_only=True)
+        elif not auth.is_authenticated:
+            # anonymous jobs are not tied to a caller, so they are never listed;
+            # they stay reachable by their ID (#24)
+            return JobList(jobs=[], links=[])
         else:
             jobs = await app.state.job_repo.list(
-                user_id=auth.user_id, include_public=True
+                user_id=auth.user_id, include_public=False
             )
         status_infos = [j.status_info for j in jobs if j.status_info]
         return JobList(jobs=status_infos, links=[])
