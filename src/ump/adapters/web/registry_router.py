@@ -55,6 +55,7 @@ from ump.core.models.registry.views import (
     ProviderServerList,
     ProviderServerView,
     RediscoveryResult,
+    RegistrySettingsView,
     RoleVocabulary,
 )
 from ump.core.services.authorization import AuthorizationService
@@ -82,6 +83,7 @@ class RegistryServices:
     drift: InterfaceDriftService
     audit: RegistryAuditService
     access: RegistryAccessService
+    settings: RegistrySettingsView
 
     @classmethod
     def create(
@@ -141,6 +143,12 @@ class RegistryServices:
             ),
             audit=RegistryAuditService(audit_log, authorization),
             access=RegistryAccessService(registry, catalog, authorization),
+            settings=RegistrySettingsView(
+                languages=list(languages),
+                default_language=languages[0],
+                public_catalogue=public_catalogue,
+                verification_job_required=require_verification_job,
+            ),
         )
 
 
@@ -170,6 +178,16 @@ def create_registry_router(
         auth = await get_auth(request)
         await services.accounts.touch(auth)  # app_user just-in-time, throttled
         return auth
+
+    @router.get(
+        "/settings",
+        response_model=RegistrySettingsView,
+        summary="Deployment settings the frontend adapts to (public)",
+    )
+    async def settings(response: Response) -> RegistrySettingsView:
+        # fixed until restart; no auth, so a frontend can read it before login
+        response.headers["Cache-Control"] = "public, max-age=300"
+        return services.settings
 
     @router.get("/me", response_model=MeView, summary="The caller's account")
     async def me(request: Request) -> MeView:

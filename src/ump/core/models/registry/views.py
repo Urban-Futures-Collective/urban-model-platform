@@ -105,6 +105,20 @@ class MeView(BaseModel):
     notify: dict[str, bool] = {}  # effective notification choice per category
 
 
+class RegistrySettingsView(BaseModel):
+    """Deployment settings a frontend adapts to (``GET /registry/v1/settings``).
+
+    Only what changes frontend behaviour; nothing secret.
+    """
+
+    languages: list[str]  # model-card languages (UMP_REGISTRY_LANGUAGES)
+    default_language: str  # for new models: the first of ``languages``
+    public_catalogue: bool  # UMP_PUBLIC_PROCESSES: published cards readable anonymously
+    # UMP_REGISTRY_REQUIRE_VERIFICATION_JOB: false (dev) makes the
+    # verification_job_id of 'verified' and reverify optional
+    verification_job_required: bool
+
+
 class RoleVocabulary(BaseModel):
     """Model-access role names of every model ever published (D8, REF-F11)."""
 
