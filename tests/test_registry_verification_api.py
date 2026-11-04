@@ -107,7 +107,7 @@ class Descriptions(SafeFetchPort):
 
 
 class Env:
-    def __init__(self):
+    def __init__(self, require_verification_job: bool = True):
         self.repo = InMemoryRegistryRepository()
         self.jobs = InMemoryJobRepository("scratch/test_registry_verification")
         self.providers = SpyProviders()
@@ -140,6 +140,7 @@ class Env:
                 public_catalogue=True,
                 jobs=self.jobs,
                 audit_log=InMemoryAuditLog(),
+                require_verification_job=require_verification_job,
             ),
         )
         self.model = asyncio.run(self._seed())
@@ -410,3 +411,103 @@ def test_owner_transfer_respects_four_eyes():
             json={"owner_sub": "ver-1"},  # the verifier of this model
         )
         assert response.status_code == 409
+
+
+# --- UMP_REGISTRY_REQUIRE_VERIFICATION_JOB --------------------------------
+
+
+def _reverify(client, env, who="verifier", **body):
+    return client.post(
+        f"/registry/v1/models/{env.model.id}/reverify",
+        headers={"Authorization": f"Bearer {who}"},
+        json=body,
+    )
+
+
+def test_verified_needs_a_job_by_default():
+    env = Env()
+    with TestClient(env.app) as client:
+        _to_review(client, env)
+        response = _step(client, env, "verifier", "verified")
+        assert response.status_code == 400
+        assert "verification_job_id" in response.json()["detail"]
+        assert env.stored().status == "in_review"
+
+
+def test_reverify_needs_a_job_by_default():
+    env = Env()
+    with TestClient(env.app) as client:
+        _to_review(client, env)
+        env.job("job-1")
+        _step(client, env, "verifier", "verified", verification_job_id="job-1")
+        response = _reverify(client, env)
+        assert response.status_code == 400
+        assert "verification_job_id" in response.json()["detail"]
+
+
+def test_bypass_verifies_and_publishes_without_a_job():
+    env = Env(require_verification_job=False)
+    with TestClient(env.app) as client:
+        _to_review(client, env)
+        verified = _step(client, env, "verifier", "verified")
+        assert verified.status_code == 200, verified.text
+
+        model = env.stored()
+        assert model.status == "verified"
+        assert model.verified_by == "ver-1"
+        assert model.verification_job_id is None
+        # the interface is still recorded, so drift detection keeps working
+        assert model.verified_interface == env.fetch.description
+        assert model.interface_state == "in_sync"
+        assert env.repo.audit[-1].details["verification_job_skipped"] is True
+
+        assert _step(client, env, "verifier", "published").status_code == 200
+
+
+def test_bypass_still_checks_a_named_job():
+    env = Env(require_verification_job=False)
+    with TestClient(env.app) as client:
+        _to_review(client, env)
+        env.job("job-x", status="failed")
+        response = _step(
+            client, env, "verifier", "verified", verification_job_id="job-x"
+        )
+        assert response.status_code == 400
+        assert "not 'successful'" in response.json()["detail"]
+        assert env.stored().status == "in_review"
+
+
+def test_bypass_with_a_job_is_not_marked_as_skipped():
+    env = Env(require_verification_job=False)
+    with TestClient(env.app) as client:
+        _to_review(client, env)
+        env.job("job-ok")
+        _step(client, env, "verifier", "verified", verification_job_id="job-ok")
+        assert env.stored().verification_job_id == "job-ok"
+        assert "verification_job_skipped" not in env.repo.audit[-1].details
+
+
+def test_bypass_keeps_four_eyes_over_http():
+    env = Env(require_verification_job=False)
+    with TestClient(env.app) as client:
+        _to_review(client, env)
+        response = _step(client, env, "owner-verifier", "verified")
+        assert response.status_code == 403
+        assert env.stored().status == "in_review"
+
+
+def test_bypass_reverifies_without_a_job():
+    env = Env(require_verification_job=False)
+    with TestClient(env.app) as client:
+        _to_review(client, env)
+        _step(client, env, "verifier", "verified")
+        _step(client, env, "verifier", "published")
+
+        env.fetch.description = {**env.fetch.description, "outputs": {"z": {}}}
+        response = _reverify(client, env, note="interface changed")
+        assert response.status_code == 200, response.text
+        assert env.stored().verified_interface == env.fetch.description
+        assert env.stored().status == "published"
+        audit = env.repo.audit[-1]
+        assert audit.action == "model.reverify"
+        assert audit.details["verification_job_skipped"] is True

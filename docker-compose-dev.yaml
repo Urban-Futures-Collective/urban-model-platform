@@ -35,6 +35,8 @@ services:
       # (e.g. ["modelserver"] for in-network model servers).
       UMP_REGISTRY_ALLOW_HTTP: ${UMP_REGISTRY_ALLOW_HTTP:-false}
       UMP_REGISTRY_ALLOWED_PRIVATE_HOSTS: ${UMP_REGISTRY_ALLOWED_PRIVATE_HOSTS:-[]}
+      # Dev bypass: false lets verifiers verify without a verification run.
+      UMP_REGISTRY_REQUIRE_VERIFICATION_JOB: ${UMP_REGISTRY_REQUIRE_VERIFICATION_JOB:-true}
       UMP_INTERFACE_CHECK_INTERVAL_SECONDS: ${UMP_INTERFACE_CHECK_INTERVAL_SECONDS:-3600}
 
       # ── Email notifications ───────────────────────────────────────────────

@@ -137,3 +137,54 @@ def test_incomplete_card_cannot_enter_review(frm, to, caller):
 
 def test_withdrawing_needs_no_complete_card():
     check_transition(_model("submitted", complete=False), "draft", OWNER, None, None)
+
+
+# --- UMP_REGISTRY_REQUIRE_VERIFICATION_JOB=false (dev bypass) ---------------
+
+
+def test_verified_without_job_when_not_required():
+    step = check_transition(
+        _model("in_review"),
+        "verified",
+        VERIFIER,
+        None,
+        None,
+        require_verification_job=False,
+    )
+    assert step is TRANSITIONS[("in_review", "verified")]
+
+
+def test_bypass_still_accepts_a_job_for_verified():
+    check_transition(
+        _model("in_review"),
+        "verified",
+        VERIFIER,
+        None,
+        "job-1",
+        require_verification_job=False,
+    )
+
+
+def test_bypass_keeps_job_id_out_of_other_steps():
+    with pytest.raises(TransitionError) as excinfo:
+        check_transition(
+            _model("verified"),
+            "published",
+            VERIFIER,
+            None,
+            "job-1",
+            require_verification_job=False,
+        )
+    assert excinfo.value.status == 400
+
+
+def test_bypass_keeps_four_eyes():
+    with pytest.raises(TransitionForbidden):
+        check_transition(
+            _model("in_review"),
+            "verified",
+            OWNER_VERIFIER,
+            None,
+            None,
+            require_verification_job=False,
+        )

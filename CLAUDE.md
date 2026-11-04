@@ -127,6 +127,8 @@ Jobs carry a local UUID; remote self/results links are rewritten to local ones
   one transaction; PATCH needs `If-Match`. User-supplied URLs are fetched only through `SafeFetchPort`
   (address checks at connect time) — never through `HttpClientPort`.
   The review workflow (status graph, four-eyes) is pure core logic in `core/models/registry/workflow.py`.
+  `verified`/`reverify` need a successful verification run of the verifier; the dev-only
+  `UMP_REGISTRY_REQUIRE_VERIFICATION_JOB=false` makes it optional (never set it in prod).
 - Inbound auth is JWT/JWKS (`JwtAuthAdapter`), off by default (`UMP_AUTH_ENABLED=false`).
   Authorization is role-based and lives in `core/services/authorization.py`: role `{provider}` grants the
   whole provider, `{provider}:{process}` a single process, and `anonymous-access: true` bypasses auth.

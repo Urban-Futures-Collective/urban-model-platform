@@ -53,7 +53,7 @@ from ump.core.services.notifications import (
     NotificationScheduler,
 )
 from ump.core.services.tool_catalog import ToolCatalogService
-from ump.core.settings import app_settings, set_logger
+from ump.core.settings import app_settings, logger, set_logger
 
 # ---------------------------------------------------------------------------
 # Logging must be configured first — before any adapter is instantiated.
@@ -265,7 +265,13 @@ registry_services = RegistryServices.create(
     public_catalogue=app_settings.UMP_PUBLIC_PROCESSES,
     jobs=job_repo,
     audit_log=audit_log,
+    require_verification_job=app_settings.UMP_REGISTRY_REQUIRE_VERIFICATION_JOB,
 )
+if not app_settings.UMP_REGISTRY_REQUIRE_VERIFICATION_JOB:
+    logger.warning(
+        "UMP_REGISTRY_REQUIRE_VERIFICATION_JOB=false: models can be verified "
+        "without a verification run. Development only — never in production."
+    )
 
 if app_settings.UMP_INTERFACE_CHECK_INTERVAL_SECONDS > 0:
     lifecycle.append(

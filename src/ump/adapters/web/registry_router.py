@@ -96,6 +96,7 @@ class RegistryServices:
         public_catalogue: bool,
         jobs: JobRepositoryPort,
         audit_log: AuditLogPort,
+        require_verification_job: bool = True,
     ) -> "RegistryServices":
         """Assemble the core services from injected ports (no adapters built here)."""
         catalog = RegistryCatalogService(registry, authorization, public_catalogue)
@@ -128,6 +129,7 @@ class RegistryServices:
                 fetch=fetch,
                 remote_auth=remote_auth,
                 cipher=cipher,
+                require_verification_job=require_verification_job,
             ),
             drift=InterfaceDriftService(
                 registry,

@@ -104,6 +104,11 @@ class UmpSettings(BaseSettings):
     UMP_REGISTRY_ALLOWED_PRIVATE_HOSTS: list[str] = []
     UMP_REGISTRY_FETCH_TIMEOUT: float = 10.0
     UMP_REGISTRY_FETCH_MAX_BYTES: int = 2_000_000
+    # DEV ONLY: false lets a verifier mark a model 'verified' (and re-verify it)
+    # without naming a successful verification run of theirs. Four-eyes, the
+    # complete card and the stored interface still apply; the audit log marks
+    # the skipped check. Never disable in production.
+    UMP_REGISTRY_REQUIRE_VERIFICATION_JOB: bool = True
     # Interface drift check of registered models (REF-F12 policy A); 0 disables.
     UMP_INTERFACE_CHECK_INTERVAL_SECONDS: float = 3600.0
     # ── Email notifications (REF-F12 "Notifications") ────────────────────────
