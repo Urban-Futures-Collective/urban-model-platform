@@ -483,6 +483,25 @@ def create_registry_router(
         response.headers["ETag"] = etag_for(view.updated_at)
         return view
 
+    @router.delete(
+        "/servers/{server_id}",
+        status_code=204,
+        response_class=Response,
+        summary=(
+            "Delete a provider server with its models (owner or platform admin; "
+            "all models draft, deactivated or rejected; If-Match required)"
+        ),
+    )
+    async def delete_server(
+        server_id: UUID,
+        request: Request,
+        if_match: Optional[str] = Header(None),
+    ) -> Response:
+        await services.onboarding.delete_server(
+            await caller(request), server_id, if_match
+        )
+        return Response(status_code=204)
+
     @router.post(
         "/servers/{server_id}/discover",
         response_model=DiscoveryResult,

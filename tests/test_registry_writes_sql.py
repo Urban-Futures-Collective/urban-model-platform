@@ -2,7 +2,8 @@
 
 The decision behind the port: a change and its audit row are committed
 together or not at all. Checked for success, unique conflicts, stale
-(optimistic-concurrency) updates and an all-or-nothing batch. Runs only with
+(optimistic-concurrency) updates, an all-or-nothing batch and the hard
+deletion of a server (migration 0006). Runs only with
 UMP_TEST_DATABASE_URL (see test_migration_0003_registry.py).
 """
 
@@ -18,11 +19,13 @@ from ump.adapters.audit_log_sql import SQLAuditLog
 from ump.adapters.registry_repository_sql import SQLModelRegistryRepository
 from ump.core.interfaces.audit_log import AuditQuery
 from ump.core.interfaces.model_registry import (
+    AccessQuery,
     InterfaceCheck,
     RegistryConflictError,
     StaleWriteError,
 )
 from ump.core.models.registry import AppUser, ProviderServer, RegistryModel
+from ump.core.models.registry.access import AccessRequest
 from ump.core.models.registry.audit import AuditEvent
 
 DB_URL = os.environ.get("UMP_TEST_DATABASE_URL")
@@ -56,7 +59,8 @@ async def db(migrated):
                 text(
                     "TRUNCATE registry.access_request, "
                     "registry.model, registry.provider_server, "
-                    "registry.app_user, registry.audit_log"
+                    "registry.app_user, registry.audit_log, "
+                    "registry.retired_server_name"
                 )
             )
 
@@ -294,3 +298,82 @@ async def test_sql_audit_log_append_and_filters(db):
     )
     assert [r.action for r in page] == ["job.execute"]
     assert await log.list_events(AuditQuery(since=only.occurred_at, limit=1)) == [only]
+
+
+async def _server_with_models(repo):
+    server = await repo.create_provider_server(
+        ProviderServer(name="srv", base_url="https://srv/", owner_sub="owner"),
+        audit=_event("server.create"),
+    )
+    models = await repo.create_models(
+        [_model(server, "p1"), _model(server, "p2")],
+        audit=[_event("model.create"), _event("model.create")],
+    )
+    return server, models
+
+
+@pytest.mark.asyncio
+async def test_delete_server_removes_models_and_access_requests_and_retires_name(db):
+    repo, audit_actions = db
+    server, models = await _server_with_models(repo)
+    await repo.create_access_request(
+        AccessRequest(user_sub="owner", model_id=models[0].id),
+        audit=_event("access.request"),
+    )
+
+    await repo.delete_provider_server(
+        server.id,
+        expected_updated_at=server.updated_at,
+        expected_models={m.id: m.updated_at for m in models},
+        audit=[_event("model.delete"), _event("model.delete"), _event("server.delete")],
+    )
+
+    assert await repo.get_provider_server_by_id(server.id) is None
+    assert all([await repo.get_model_by_id(m.id) is None for m in models])
+    assert await repo.list_access_requests(AccessQuery()) == []
+    assert (await audit_actions())[-3:] == [
+        "model.delete",
+        "model.delete",
+        "server.delete",
+    ]
+    # the name never comes back (migration 0006 trigger)
+    with pytest.raises(RegistryConflictError):
+        await repo.create_provider_server(
+            ProviderServer(name="srv", base_url="https://other/"),
+            audit=_event("server.create.again"),
+        )
+    assert "server.create.again" not in await audit_actions()
+
+
+@pytest.mark.parametrize("change", ["server", "model", "new_model"])
+@pytest.mark.asyncio
+async def test_stale_delete_removes_nothing(db, change):
+    repo, audit_actions = db
+    server, models = await _server_with_models(repo)
+    expected = {m.id: m.updated_at for m in models}
+    if change == "server":
+        await repo.update_provider_server(
+            server.model_copy(update={"is_active": False}),
+            expected_updated_at=server.updated_at,
+            audit=_event("server.update"),
+        )
+    elif change == "model":
+        await repo.update_model(
+            models[0].model_copy(update={"status": "submitted"}),
+            expected_updated_at=models[0].updated_at,
+            audit=_event("model.status.change"),
+        )
+    else:
+        await repo.create_models([_model(server, "p3")], audit=[_event("model.create")])
+
+    with pytest.raises(StaleWriteError):
+        await repo.delete_provider_server(
+            server.id,
+            expected_updated_at=server.updated_at,
+            expected_models=expected,
+            audit=[_event("server.delete")],
+        )
+    assert await repo.get_provider_server_by_id(server.id) is not None
+    assert "server.delete" not in await audit_actions()
+    # nothing retired: the name is still the live server's
+    assert await repo.get_provider_server("srv") is not None
