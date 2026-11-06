@@ -1,3 +1,4 @@
+import copy
 from typing import Any, Dict, List, Tuple, cast
 
 import pytest
@@ -210,3 +211,66 @@ async def test_execute_process_delegates_to_job_manager():
         assert fake_jm.calls == [
             ("infra:echo", {"x": 1}, {"Prefer": "respond-async"}, None)
         ]
+
+
+# --- Input metadata as OGC list (OGC 18-062r2 descriptionType.metadata) -------
+# Regression for umep processes (shade, heat, solar) that were served as 502
+# because ProcessInput.metadata was typed as a dict.
+
+SOURCE_ENTRY = {
+    "role": "source-collection",
+    "title": "Ist-Zustand der Stadt",
+    "href": "https://umep.local/collections/buildings/items?f=json&city={city}",
+    "x-ump-buffer-m": 150,
+}
+
+
+def _umep_like_process(metadata: Any) -> Dict[str, Any]:
+    return {
+        "id": "infra:echo",
+        "version": "1.0",
+        "jobControlOptions": ["async-execute"],
+        "outputTransmission": ["value"],
+        "links": [],
+        "inputs": {
+            "buildings": {
+                "title": "Buildings",
+                "description": "Building footprints",
+                "schema": {"type": "object"},
+                "metadata": metadata,
+            }
+        },
+        "outputs": {
+            "result": {
+                "title": "Result",
+                "description": "Result",
+                "schema": {"type": "object"},
+            }
+        },
+    }
+
+
+def _manager(responses: Dict[str, Any]) -> ProcessManager:
+    providers = FakeProvidersService(
+        FakeProvider(name="infra", url="http://provider.local/")
+    )
+    return ProcessManager(
+        cast(ProvidersPort, providers),
+        cast(HttpClientPort, FakeHttpClient(responses)),
+        process_id_validator=cast(ProcessIdValidatorPort, ColonProcessId()),
+    )
+
+
+def test_list_metadata_validates_and_keeps_extra_fields():
+    model = Process(**_umep_like_process([dict(SOURCE_ENTRY)]))
+    dumped = model.model_dump(by_alias=True)
+    assert dumped["inputs"]["buildings"]["metadata"] == [SOURCE_ENTRY]
+
+
+@pytest.mark.asyncio
+async def test_fetch_process_with_umep_like_description_succeeds():
+    url = "http://provider.local/processes/echo"
+    manager = _manager({url: _umep_like_process([copy.deepcopy(SOURCE_ENTRY)])})
+    model = await manager.get_process("infra:echo")
+    dumped = model.model_dump(by_alias=True)
+    assert dumped["inputs"]["buildings"]["metadata"] == [SOURCE_ENTRY]
