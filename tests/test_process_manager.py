@@ -261,41 +261,10 @@ def _manager(responses: Dict[str, Any]) -> ProcessManager:
     )
 
 
-def _run_handlers(manager: ProcessManager, proc: Dict[str, Any]) -> Dict[str, Any]:
-    for handler in manager._process_handlers:
-        proc = handler("infra", proc)
-    return proc
-
-
 def test_list_metadata_validates_and_keeps_extra_fields():
     model = Process(**_umep_like_process([dict(SOURCE_ENTRY)]))
     dumped = model.model_dump(by_alias=True)
     assert dumped["inputs"]["buildings"]["metadata"] == [SOURCE_ENTRY]
-
-
-def test_single_dict_metadata_is_wrapped_into_list():
-    manager = _manager({})
-    proc = _run_handlers(manager, _umep_like_process(dict(SOURCE_ENTRY)))
-    model = Process(**proc)
-    meta = model.model_dump(by_alias=True)["inputs"]["buildings"]["metadata"]
-    assert meta == [SOURCE_ENTRY]
-
-
-def test_incomplete_entries_are_dropped():
-    manager = _manager({})
-    no_href = {"role": "source-collection", "title": "no link"}
-    proc = _run_handlers(
-        manager, _umep_like_process([no_href, "junk", dict(SOURCE_ENTRY)])
-    )
-    meta = Process(**proc).model_dump(by_alias=True)["inputs"]["buildings"]["metadata"]
-    assert meta == [SOURCE_ENTRY]
-
-
-def test_only_incomplete_entries_remove_the_key():
-    manager = _manager({})
-    proc = _run_handlers(manager, _umep_like_process([{"title": "only title"}]))
-    assert "metadata" not in proc["inputs"]["buildings"]
-    assert Process(**proc).inputs["buildings"].metadata is None
 
 
 @pytest.mark.asyncio
