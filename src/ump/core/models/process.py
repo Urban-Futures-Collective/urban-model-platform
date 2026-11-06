@@ -46,23 +46,29 @@ class Schema(BaseModel):
         exclude_none = True
 
 
+class Metadata(BaseModel):
+    # OGC metadata entry (metadata.yaml). Extra keys are kept: providers attach
+    # hints such as ``x-ump-buffer-m`` that clients rely on, and the OGC schema
+    # does not forbid them. (A comment, not a docstring: a docstring would end
+    # up in the OpenAPI contract as a description.)
+    model_config = ConfigDict(extra="allow")
+
+    title: str
+    role: str
+    href: str
+
+
 class ProcessInput(BaseModel):
     title: str
     description: str
     scheme: Schema = Field(alias="schema")
     minOccurs: int = 1
     maxOccurs: Optional[int] = 1
-    metadata: Optional[Dict[str, Any]] = None
+    metadata: Optional[List[Metadata]] = None
 
     class Config:
         exclude_none = True
         populate_by_name = True
-
-
-class Metadata(BaseModel):
-    title: str
-    role: str
-    href: str
 
 
 class ProcessOutput(BaseModel):

@@ -427,6 +427,7 @@
       "type": "object"
     },
     "Metadata": {
+      "additionalProperties": true,
       "properties": {
         "href": {
           "title": "Href",
@@ -600,8 +601,10 @@
         "metadata": {
           "anyOf": [
             {
-              "additionalProperties": true,
-              "type": "object"
+              "items": {
+                "$ref": "#/components/schemas/Metadata"
+              },
+              "type": "array"
             },
             {
               "type": "null"
