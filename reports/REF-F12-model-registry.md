@@ -1,4 +1,4 @@
-_Last_updated: 2026-10-29
+_Last_updated: 2026-11-05
 
 # Notes for the assistant
 
@@ -47,6 +47,7 @@ Artefacts:
 | D14 | **Email notifications are derived from the audit log** (decided 2026-10-29). A dispatcher reads new `audit_log` rows and mails the people concerned; no outbox table. | Every audited change can notify without touching the service that makes it; no mail for rolled-back changes. +1 single-row cursor table, +3 columns on `app_user`. See [Notifications](#notifications-phase-e2). |
 | D15 | **Access requests: UMP records the workflow, Keycloak holds the grant** (option A, decided 2026-10-29). One table `access_request`; UMP-X's Nitro server maps/unmaps the Keycloak role **first** and then records the decision in UMP with the admin's token. Per model only; the model owner is informed, not asked. | UMP keeps no IdP write path (F11) and D2 stands. Grants made outside the flow (console, groups, provider-wide) are invisible to UMP; a reconciler closes records whose role is gone. Revocation still takes effect at the next token refresh. See [Access requests](#access-requests-phase-e1). |
 | D16 | **Closed access requests are deleted after 3 months** (`denied`, `withdrawn`, `revoked`), with the audit log (D11). | Open and granted records are kept as long as they are open. |
+| D17 | **Provider servers can be hard-deleted** (decided 2026-11-05) by their owner or a `platform-admin`, together with their models and those models' access requests — but only while **every** model is `draft`, `deactivated` or `rejected`. The server name is **retired** and can never be registered again. | Duplicate registrations of the same server no longer clutter the registry for good. Models leave the registry only with their server; the audit log keeps a `model.delete` / `server.delete` record of each. See [Deleting a provider server](#deleting-a-provider-server). |
 
 ## Simplification: what was dropped and why
 
@@ -293,8 +294,8 @@ Rules:
 - **Re-verification** of a published model (e.g. after drift) updates the `verified_*`
   columns in place; the model stays `published`.
 - **No dead ends (added 2026-11-04).** A model is unique per `(provider_server_id,
-  remote_process_id)` and models are never deleted, so a final `deactivated`/`rejected`
-  would block that process on that server for good. **Reactivation**
+  remote_process_id)` and models are not deleted on their own (only with their server,
+  D17), so a final `deactivated`/`rejected` would block that process on that server for good. **Reactivation**
   (`deactivated → in_review`) starts a new review round: the model is runnable by
   verifiers only (`exec_state = in_review`), the card is editable again, and verifying
   needs a verification run newer than the reactivation; the previous `verified_*` values
@@ -354,7 +355,8 @@ UMP has no write path to Keycloak (F11), so role creation happens in UMP-X:
    roles and creates missing ones. This repairs any publish where step 2 failed after
    step 1 succeeded.
 
-The vocabulary is every model with `published_at IS NOT NULL`. Roles are **never deleted**
+The vocabulary is every model with `published_at IS NOT NULL` that still exists; a model
+deleted with its server (D17) drops out of it. Roles are **never deleted**
 automatically — deactivation is enforced by UMP (D9); deleting the role would erase the
 record of who had access. The service account needs `manage-realm` for role creation (see
 F11).
@@ -907,6 +909,7 @@ Delivery phases: **A** read + identity (`/me`, `/models`, `/servers`, `/roles/vo
 | `POST` | `/servers` | `provider` |
 | `GET` | `/servers`, `/servers/{id}` | `provider` (own), `platform-admin` |
 | `PATCH` | `/servers/{id}` | owner, `platform-admin` |
+| `DELETE` | `/servers/{id}` — `If-Match` required; 204, or 409 listing the blocking models (D17) | owner, `platform-admin` |
 | `POST` | `/servers/{id}/discover` · `/servers/{id}/rediscover` | owner, `platform-admin` |
 | `POST` | `/servers/{id}/models` — `{remote_process_ids: [...]}` | `provider` |
 | `GET` | `/models`, `/models/{id}` — `?lang=` / `Accept-Language`, `?lang=*` for all | anyone / `viewer` per D10 |
@@ -921,6 +924,39 @@ Delivery phases: **A** read + identity (`/me`, `/models`, `/servers`, `/roles/vo
 | `POST` | `/models/{id}/access-grants` (phase E1) — record a matrix grant | `access-admin` (via Nitro) |
 | `GET` | `/access-requests`, `/access-requests/{id}` (phase E1) | `access-admin`; owner (own models); requester (own) |
 | `POST` | `/access-requests/{id}/transitions` (phase E1) | requester (`withdrawn`), `access-admin` (rest; `granted`/`revoked` via Nitro) |
+
+## Deleting a provider server
+
+Several providers may register the same model server (e.g. with different credentials),
+so servers accumulate. `DELETE /registry/v1/servers/{id}` (D17) removes one for good.
+
+- **Who:** the owner (holding `provider`) or a `platform-admin`; anyone else gets 404 like
+  for the other server endpoints. `If-Match` with the server's ETag is required (428/412).
+- **When:** every model of the server is `draft`, `deactivated` or `rejected`
+  (`SERVER_DELETABLE_STATUSES` in `core/models/registry/workflow.py`) — none is runnable
+  or under review, and none can become so without someone acting first. Otherwise 409; the
+  detail names the blocking models and their statuses. A server without models is always
+  deletable.
+- **What goes:** the server, all its models (cards, verification data) and the access
+  requests of those models, including granted ones of a deactivated model. One
+  `model.delete` audit event per model (slug, status, `published_at`, number of access
+  requests) and one `server.delete` event are written in the same transaction.
+- **What stays:** the audit log (no foreign keys); jobs in `public.jobs`, whose
+  `process_id` no longer resolves to a model; model-access roles in Keycloak (never deleted
+  automatically, see [Publishing and Keycloak roles](#publishing-and-keycloak-roles)) —
+  UMP-X should offer to remove them.
+- **Name retirement:** the name prefixes process ids, model-access roles and job history,
+  so it must not pass to an unrelated server. Migration 0006 records it in
+  `registry.retired_server_name`; a `BEFORE INSERT` trigger on `provider_server` refuses it
+  with `unique_violation` (→ `RegistryConflictError` → 409). Trigger and
+  `retire_server_name()` share a transaction-scoped advisory lock on the name, so a
+  registration racing the deletion waits and then sees the retired row.
+- **Concurrency:** the service decides on the models it read; the repository deletes only
+  if the server's `updated_at` and the exact set of models with their `updated_at` are
+  unchanged (rows locked `FOR UPDATE`), else `StaleWriteError` → 412. A model that moved
+  to `submitted` meanwhile therefore blocks the deletion instead of being lost.
+- The provider snapshot is reloaded (and the NOTIFY triggers fire), so the server's
+  processes disappear from `/processes` at once.
 
 ## Migrations
 
@@ -1131,6 +1167,11 @@ specified in [Notifications](#notifications-phase-e2).
 Not yet: retention (`ump-retention` + CronJob; it will also delete closed access requests,
 D16).
 
+**Server deletion (D17) is implemented** (2026-11-05): migration 0006, `DELETE
+/servers/{id}`, `ModelRegistryPort.delete_provider_server` (SQL + in-memory), as specified in
+[Deleting a provider server](#deleting-a-provider-server). Not part of UMP: the admin tab in
+UMP-X and the removal of orphaned Keycloak roles.
+
 ## Implementation phases
 
 0. **Prerequisite P1.** Reject unconfigured/excluded processes on execution. Ships
@@ -1258,6 +1299,7 @@ stops new runs (D9), catalogue follows `UMP_PUBLIC_PROCESSES` (D10), 3-month ret
 | `charts/urban-model-platform/templates/cronjob-retention.yaml` | CREATE — daily `ump-retention` |
 | `migrations/versions/0004_access_requests.py` | DONE — `access_request` (E1) |
 | `migrations/versions/0005_notifications.py` | DONE — `notification_cursor`, `app_user` columns (E2) |
+| `migrations/versions/0006_server_deletion.py` | DONE — `retired_server_name`, retire function and insert trigger (D17) |
 | `src/ump/core/models/registry/access.py`, `src/ump/core/services/registry_access.py` | DONE — access requests (E1) |
 | `src/ump/core/interfaces/model_registry.py`, `src/ump/adapters/registry_repository_*.py`, `src/ump/adapters/web/registry_router.py` | DONE — access-request methods and endpoints (E1) |
 | `src/ump/core/models/registry/notifications.py`, `src/ump/core/services/notifications.py` | DONE — policy (`plan`), `NotificationDispatcher`, `NotificationScheduler` (E2) |
