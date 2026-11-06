@@ -164,6 +164,37 @@ class ProcessManager(ProcessesPort):
 
         return proc
 
+    @staticmethod
+    def _sanitize_metadata_field(holder: Dict[str, Any]) -> int:
+        """Clean ``holder["metadata"]`` in place; return the number of dropped entries.
+
+        A single dict is wrapped into a one-element list (some providers send
+        the non-OGC dict form). Entries that are not dicts or lack one of
+        ``title``, ``role``, ``href`` are dropped; extra keys of valid entries
+        are kept untouched. If nothing valid remains the key is removed.
+        """
+        if "metadata" not in holder:
+            return 0
+        meta = holder["metadata"]
+        if meta is None:
+            holder.pop("metadata", None)
+            return 0
+        if isinstance(meta, dict):
+            meta = [meta]
+        if not isinstance(meta, list):
+            holder.pop("metadata", None)
+            return 1
+        valid = [
+            m
+            for m in meta
+            if isinstance(m, dict) and all(k in m for k in ("title", "role", "href"))
+        ]
+        if valid:
+            holder["metadata"] = valid
+        else:
+            holder.pop("metadata", None)
+        return len(meta) - len(valid)
+
     def _handle_sanitize_metadata(
         self, provider_name: str, proc: Dict[str, Any]
     ) -> Dict[str, Any]:
@@ -175,43 +206,16 @@ class ProcessManager(ProcessesPort):
         a count of removed entries. If after filtering nothing remains we remove
         the metadata key entirely so Pydantic treats it as absent.
 
-        We apply the same logic to output metadata (each item in `outputs`).
+        The same rules apply to process-level metadata and to the metadata of
+        every input and output.
         """
-        removed_count = 0
-        # Process-level metadata
-        if isinstance(proc.get("metadata"), list):
-            valid_meta: List[Dict[str, Any]] = []
-            for m in proc["metadata"]:
-                if not isinstance(m, dict):
-                    removed_count += 1
-                    continue
-                if not all(k in m for k in ("title", "role", "href")):
-                    removed_count += 1
-                    continue
-                valid_meta.append(m)
-            if valid_meta:
-                proc["metadata"] = valid_meta
-            else:
-                proc.pop("metadata", None)
-        # Outputs metadata (if detailed description already fetched)
-        if isinstance(proc.get("outputs"), dict):
-            for out_id, out_def in list(proc["outputs"].items()):
-                meta_list = out_def.get("metadata")
-                if isinstance(meta_list, list):
-                    valid_out_meta: List[Dict[str, Any]] = []
-                    for m in meta_list:
-                        if not isinstance(m, dict):
-                            removed_count += 1
-                            continue
-                        if not all(k in m for k in ("title", "role", "href")):
-                            removed_count += 1
-                            continue
-                        valid_out_meta.append(m)
-                    if valid_out_meta:
-                        out_def["metadata"] = valid_out_meta
-                    else:
-                        # Delete malformed metadata entirely
-                        out_def.pop("metadata", None)
+        removed_count = self._sanitize_metadata_field(proc)
+        for section in ("inputs", "outputs"):
+            defs = proc.get(section)
+            if isinstance(defs, dict):
+                for definition in defs.values():
+                    if isinstance(definition, dict):
+                        removed_count += self._sanitize_metadata_field(definition)
         if removed_count:
             logger.debug(
                 f"Sanitized metadata for process '{proc.get('id')}' from provider '{provider_name}': removed {removed_count} malformed entries"
