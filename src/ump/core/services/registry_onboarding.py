@@ -5,6 +5,10 @@
   (owner = caller) and edits it; platform admins may edit any server. The name
   prefixes process ids and roles and is immutable. Credentials are encrypted
   before they reach the repository and are never returned.
+- ``delete_server``: owner or platform admin hard-deletes a server with its
+  models and their access requests, provided every model is in
+  ``SERVER_DELETABLE_STATUSES`` (draft, deactivated, rejected). The name is
+  retired for good, so it cannot be reused by an unrelated server.
 - ``discover``: lists the processes the server advertises, marking those that
   are already registered.
 - ``create_models``: one ``draft`` model per selected process, pre-filled from
@@ -29,6 +33,7 @@ from ump.core.interfaces.credential_cipher import (
     CredentialCipherPort,
 )
 from ump.core.interfaces.model_registry import (
+    AccessQuery,
     ModelQuery,
     ModelRegistryPort,
     RegistryConflictError,
@@ -57,6 +62,7 @@ from ump.core.models.registry.views import (
     ModelsCreated,
     ProviderServerView,
 )
+from ump.core.models.registry.workflow import SERVER_DELETABLE_STATUSES
 from ump.core.services.authorization import AuthorizationService
 from ump.core.services.registry_common import check_if_match, owns_server, problem
 from ump.core.services.registry_remote import RegistryRemote
@@ -131,7 +137,11 @@ class RegistryOnboardingService:
                 ),
             )
         except RegistryConflictError:
-            raise problem(409, "Conflict", f"Server name '{body.name}' is taken.")
+            raise problem(
+                409,
+                "Conflict",
+                f"Server name '{body.name}' is taken or was retired by a deletion.",
+            )
         return server_view(stored)
 
     async def update_server(
@@ -174,6 +184,84 @@ class RegistryOnboardingService:
         )
         self._providers.load_providers()  # url, auth, ttw, active are in the snapshot
         return server_view(stored)
+
+    async def delete_server(
+        self, auth: AuthContext, server_id: UUID, if_match: str | None
+    ) -> None:
+        """Hard-delete a server whose models are all deletable (see module doc)."""
+        server = await self._owned_server(auth, server_id)
+        check_if_match(if_match, server.updated_at)
+
+        models = await self._registry.list_models(
+            ModelQuery(provider_server_id=server.id, limit=100_000)
+        )
+        blocking = sorted(
+            (m for m in models if m.status not in SERVER_DELETABLE_STATUSES),
+            key=lambda m: m.slug,
+        )
+        if blocking:
+            raise problem(
+                409,
+                "Conflict",
+                "A server can only be deleted while all its models are "
+                f"{', '.join(sorted(SERVER_DELETABLE_STATUSES))}; blocking: "
+                + ", ".join(f"{m.slug} ({m.status})" for m in blocking),
+            )
+
+        access_requests = {
+            m.id: await self._registry.list_access_requests(
+                AccessQuery(model_id=m.id, limit=100_000)
+            )
+            for m in models
+        }
+        events = [
+            AuditEvent.by(
+                auth,
+                "model.delete",
+                model_id=m.id,
+                details={
+                    "server": server.name,
+                    "remote_process_id": m.remote_process_id,
+                    "slug": m.slug,
+                    "status": m.status,
+                    "owner_sub": m.owner_sub,
+                    "published_at": (
+                        m.published_at.isoformat() if m.published_at else None
+                    ),
+                    "access_requests": len(access_requests[m.id]),
+                },
+            )
+            for m in sorted(models, key=lambda m: m.slug)
+        ]
+        events.append(
+            AuditEvent.by(
+                auth,
+                "server.delete",
+                details={
+                    "server_id": str(server.id),
+                    "name": server.name,
+                    "base_url": server.base_url,
+                    "owner_sub": server.owner_sub,
+                    "models": [str(m.id) for m in models],
+                    "access_requests": sum(map(len, access_requests.values())),
+                },
+            )
+        )
+        try:
+            await self._registry.delete_provider_server(
+                server.id,
+                expected_updated_at=server.updated_at,
+                expected_models={m.id: m.updated_at for m in models},
+                audit=events,
+            )
+        except StaleWriteError:
+            raise problem(
+                412,
+                "Precondition Failed",
+                "The server or one of its models was changed concurrently; "
+                "reload and retry.",
+            )
+        self._providers.load_providers()  # drop the server from the snapshot
 
     # ------------------------------------------------------------------
     # Discovery and draft models

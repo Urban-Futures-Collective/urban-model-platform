@@ -5,7 +5,8 @@ Same two-model pattern as job_repository_sql.py:
   - Adapter ORM models: AppUserRecord / ProviderServerRecord / ModelRecord /
     AccessRequestRecord
 
-The tables are created by migrations 0003 and 0004. ``exec_state`` is a generated column
+The tables are created by migrations 0003 and 0004; 0006 adds retired server
+names for ``delete_provider_server``. ``exec_state`` is a generated column
 and not mapped (the core derives it, see ``exec_state_for``). Columns with
 database defaults (timestamps) are left out of INSERTs when the domain value is
 None, and every write returns the stored row.
@@ -29,8 +30,10 @@ from sqlalchemy import (
     DateTime,
     LargeBinary,
     Text,
+    delete,
     func,
     or_,
+    text,
     tuple_,
     update,
 )
@@ -361,6 +364,60 @@ class SQLModelRegistryRepository(ModelRegistryPort):
         )
         (row,) = await self._write([stmt], [audit])
         return _server(row)
+
+    async def delete_provider_server(
+        self,
+        server_id: UUID,
+        *,
+        expected_updated_at,
+        expected_models: dict[UUID, datetime],
+        audit: list[AuditEvent],
+    ) -> None:
+        async with self._session_factory() as session:
+            async with session.begin():
+                # lock the server and its models: a concurrent update waits,
+                # then finds its row gone (StaleWriteError on its side)
+                server = (
+                    await session.execute(
+                        select(_SERVERS.c.name)
+                        .where(
+                            _SERVERS.c.id == server_id,
+                            _SERVERS.c.updated_at == expected_updated_at,
+                        )
+                        .with_for_update()
+                    )
+                ).first()
+                if server is None:
+                    raise StaleWriteError(str(server_id))
+                models = (
+                    await session.execute(
+                        select(_MODELS.c.id, _MODELS.c.updated_at)
+                        .where(_MODELS.c.provider_server_id == server_id)
+                        .with_for_update()
+                    )
+                ).all()
+                if {m.id: m.updated_at for m in models} != expected_models:
+                    raise StaleWriteError(str(server_id))
+
+                await session.execute(
+                    text(f"SELECT {SCHEMA}.retire_server_name(:name)"),
+                    {"name": server.name},
+                )
+                if models:
+                    model_ids = [m.id for m in models]
+                    await session.execute(
+                        delete(_ACCESS).where(_ACCESS.c.model_id.in_(model_ids))
+                    )
+                    await session.execute(
+                        delete(_MODELS).where(_MODELS.c.id.in_(model_ids))
+                    )
+                await session.execute(
+                    delete(_SERVERS).where(_SERVERS.c.id == server_id)
+                )
+                if audit:
+                    await session.execute(
+                        insert(AUDIT), [audit_values(a) for a in audit]
+                    )
 
     # --- models -----------------------------------------------------------
 

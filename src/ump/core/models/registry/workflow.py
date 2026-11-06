@@ -57,6 +57,13 @@ TRANSITIONS: dict[tuple[str, str], Step] = {
     ("rejected", "draft"): Step("owner"),  # reopen for rework
 }
 
+# A provider server may be hard-deleted (with its models) only while every one
+# of its models is in one of these statuses: none of them is runnable or under
+# review, and none can become so without the owner or a verifier acting first.
+# Anything else — submitted, in_review, changes_requested, verified, published —
+# is live workflow state that a deletion would silently discard.
+SERVER_DELETABLE_STATUSES = frozenset({"draft", "deactivated", "rejected"})
+
 # Statuses from which the card must be complete in the default language
 # before moving on (stricter than the CHECK, which starts at in_review, so
 # the owner learns it when submitting rather than when a verifier picks up).

@@ -1,7 +1,8 @@
 """In-memory ModelRegistryPort for tests and database-less development.
 
-Enforces the uniqueness rules of migrations 0003/0004 (server name, model slug,
-server + remote process, one open access request per user and model) and the
+Enforces the uniqueness rules of migrations 0003/0004/0006 (server name, also
+once retired; model slug, server + remote process, one open access request per
+user and model) and the
 optimistic-concurrency rule of the port, so
 tests see the same conflicts as the database. Fills the timestamps the
 database would set, and keeps the audit events in ``audit`` (written together
@@ -40,6 +41,7 @@ class InMemoryRegistryRepository(ModelRegistryPort):
         self._audit_log = audit_log
         self.users: dict[str, AppUser] = {}
         self.servers: dict[str, ProviderServer] = {}
+        self.retired_server_names: set[str] = set()
         self.models: dict[tuple[UUID, str], RegistryModel] = {}
         self.access_requests: dict[UUID, AccessRequest] = {}
         self.audit: list[AuditEvent] = []
@@ -147,7 +149,7 @@ class InMemoryRegistryRepository(ModelRegistryPort):
     async def create_provider_server(
         self, server: ProviderServer, *, audit: AuditEvent
     ) -> ProviderServer:
-        if server.name in self.servers:
+        if server.name in self.servers or server.name in self.retired_server_names:
             raise RegistryConflictError(f"provider_server {server.name!r} exists")
         now = self._now()
         stored = server.model_copy(update={"created_at": now, "updated_at": now})
@@ -171,6 +173,34 @@ class InMemoryRegistryRepository(ModelRegistryPort):
         self.servers[current.name] = stored
         await self._record([audit])
         return stored.model_copy()
+
+    async def delete_provider_server(
+        self,
+        server_id: UUID,
+        *,
+        expected_updated_at,
+        expected_models: dict[UUID, datetime],
+        audit: list[AuditEvent],
+    ) -> None:
+        current = await self.get_provider_server_by_id(server_id)
+        if current is None or current.updated_at != expected_updated_at:
+            raise StaleWriteError(str(server_id))
+        models = {
+            key: m
+            for key, m in self.models.items()
+            if m.provider_server_id == server_id
+        }
+        if {m.id: m.updated_at for m in models.values()} != expected_models:
+            raise StaleWriteError(str(server_id))
+        model_ids = {m.id for m in models.values()}
+        for request_id, request in list(self.access_requests.items()):
+            if request.model_id in model_ids:
+                del self.access_requests[request_id]
+        for key in models:
+            del self.models[key]
+        del self.servers[current.name]
+        self.retired_server_names.add(current.name)
+        await self._record(audit)
 
     # --- models -----------------------------------------------------------
 

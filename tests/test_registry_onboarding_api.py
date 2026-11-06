@@ -3,9 +3,10 @@
 In-memory registry, a real Fernet cipher and an in-test SafeFetchPort that
 serves OGC descriptions (optionally per Accept-Language). Covers roles and
 ownership, If-Match, write-only credentials, audit events, provider snapshot
-reloads and the card rules.
+reloads, the card rules and hard deletion of servers.
 """
 
+import asyncio
 import json
 from datetime import datetime, timezone
 from typing import Any, Dict, List
@@ -24,6 +25,7 @@ from ump.adapters.web.fastapi import create_app
 from ump.adapters.web.registry_router import RegistryServices
 from ump.core.interfaces.auth import AuthContext, AuthPort
 from ump.core.interfaces.http_client import HttpClientPort
+from ump.core.interfaces.model_registry import StaleWriteError
 from ump.core.interfaces.providers import ProvidersPort
 from ump.core.interfaces.safe_fetch import (
     RemoteFetchError,
@@ -31,6 +33,9 @@ from ump.core.interfaces.safe_fetch import (
     UnsafeUrlError,
 )
 from ump.core.managers.process_manager import ProcessManager
+from ump.core.models.registry import AppUser
+from ump.core.models.registry.access import AccessRequest
+from ump.core.models.registry.audit import AuditEvent
 from ump.core.services.authorization import AuthorizationService
 
 T0 = datetime(2026, 10, 1, tzinfo=timezone.utc)
@@ -351,6 +356,139 @@ def test_patch_server_needs_current_etag_and_ownership():
             "before": "BasicAuth",
             "after": "NoAuth",
         }
+
+
+# --- deleting servers ---------------------------------------------------------
+
+
+def _set_slug_status(repo, slug, status, **extra):
+    key, model = next((k, m) for k, m in repo.models.items() if m.slug == slug)
+    repo.models[key] = model.model_copy(update={"status": status, **extra})
+
+
+def _etag(client, sid, who="owner"):
+    return _call(client, "GET", f"/servers/{sid}", who).headers["ETag"]
+
+
+def test_delete_server_needs_current_etag_and_ownership():
+    client, repo, _, providers, _ = _setup()
+    with client:
+        sid = _create_server(client).json()["id"]
+        etag = _etag(client, sid)
+
+        assert _call(client, "DELETE", f"/servers/{sid}", "owner").status_code == 428
+        assert (
+            _call(client, "DELETE", f"/servers/{sid}", "owner", '"stale"').status_code
+            == 412
+        )
+        for who, status in (("other", 404), ("verifier", 403), ("viewer", 403)):
+            assert (
+                _call(client, "DELETE", f"/servers/{sid}", who, etag).status_code
+                == status
+            ), who
+
+        reloads = providers.reloads
+        gone = _call(client, "DELETE", f"/servers/{sid}", "owner", etag)
+        assert gone.status_code == 204 and gone.content == b""
+        assert providers.reloads == reloads + 1
+        assert repo.servers == {}
+        assert _call(client, "GET", f"/servers/{sid}", "owner").status_code == 404
+        assert (
+            _call(client, "DELETE", f"/servers/{sid}", "owner", etag).status_code == 404
+        )
+        assert repo.audit[-1].action == "server.delete"
+        assert repo.audit[-1].details["name"] == "bikebox"
+
+
+@pytest.mark.parametrize(
+    "blocking", ["submitted", "in_review", "changes_requested", "verified", "published"]
+)
+def test_delete_server_is_refused_while_a_model_is_in_the_workflow(blocking):
+    client, repo, *_ = _setup()
+    with client:
+        sid = _create_server(client).json()["id"]
+        _create_models(client, sid)
+        _set_slug_status(repo, "bikebox-growbike", blocking)
+
+        refused = _call(
+            client, "DELETE", f"/servers/{sid}", "admin", _etag(client, sid)
+        )
+        assert refused.status_code == 409
+        assert f"bikebox-growbike ({blocking})" in refused.json()["detail"]
+        assert "bikebox-fixbike" not in refused.json()["detail"]  # a draft
+        assert len(repo.models) == 2 and "bikebox" in repo.servers
+
+
+def test_delete_server_removes_deletable_models_and_their_access_requests():
+    client, repo, *_ = _setup()
+    with client:
+        sid = _create_server(client).json()["id"]
+        _create_models(client, sid)
+        # a model that was published and later deactivated keeps its grants
+        _set_slug_status(repo, "bikebox-growbike", "deactivated", published_at=T0)
+        _set_slug_status(repo, "bikebox-fixbike", "rejected")
+        deactivated = next(m for m in repo.models.values() if m.status == "deactivated")
+        repo.users["user-1"] = AppUser(sub="user-1")
+        grant = AccessRequest(
+            user_sub="user-1", model_id=deactivated.id, status="granted"
+        )
+        repo.access_requests[grant.id] = grant
+
+        # a platform admin may delete any server
+        gone = _call(client, "DELETE", f"/servers/{sid}", "admin", _etag(client, sid))
+        assert gone.status_code == 204
+        assert repo.models == {} and repo.access_requests == {}
+
+        events = [e for e in repo.audit if e.action.endswith(".delete")]
+        assert [e.action for e in events] == [
+            "model.delete",
+            "model.delete",
+            "server.delete",
+        ]
+        assert {e.details["status"] for e in events[:2]} == {"deactivated", "rejected"}
+        growbike = next(e for e in events if e.model_id == deactivated.id)
+        assert growbike.details["access_requests"] == 1
+        assert growbike.details["published_at"] == T0.isoformat()
+        assert events[-1].details["access_requests"] == 1
+        assert events[-1].details["models"] and events[-1].actor_sub == "adm-1"
+
+
+def test_deleted_server_name_is_retired():
+    client, repo, *_ = _setup()
+    with client:
+        sid = _create_server(client).json()["id"]
+        _call(client, "DELETE", f"/servers/{sid}", "owner", _etag(client, sid))
+        again = _call(client, "POST", "/servers", "other", json=SERVER)
+        assert again.status_code == 409
+        assert "retired" in again.json()["detail"]
+        assert repo.retired_server_names == {"bikebox"}
+
+
+def test_delete_server_is_stale_when_a_model_changed_after_the_check():
+    client, repo, *_ = _setup()
+    with client:
+        sid = _create_server(client).json()["id"]
+        _create_models(client, sid, ids=("growbike",))
+        server = repo.servers["bikebox"]
+        (model,) = repo.models.values()
+
+        async def run():
+            # the service decided on this state; then the model moved on
+            await repo.update_model(
+                model.model_copy(update={"status": "submitted"}),
+                expected_updated_at=model.updated_at,
+                audit=AuditEvent(actor_sub="owner-1", action="model.status.change"),
+            )
+            await repo.delete_provider_server(
+                server.id,
+                expected_updated_at=server.updated_at,
+                expected_models={model.id: model.updated_at},
+                audit=[],
+            )
+
+        with pytest.raises(StaleWriteError):
+            asyncio.run(run())
+        assert "bikebox" in repo.servers and len(repo.models) == 1
 
 
 # --- discovery and drafts -----------------------------------------------------

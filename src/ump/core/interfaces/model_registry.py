@@ -178,13 +178,38 @@ class ModelRegistryPort(ABC):
     async def create_provider_server(
         self, server: ProviderServer, *, audit: AuditEvent
     ) -> ProviderServer:
-        """Insert *server*; ``RegistryConflictError`` if the name is taken."""
+        """Insert *server*; ``RegistryConflictError`` if the name is taken or
+        retired (see ``delete_provider_server``)."""
 
     @abstractmethod
     async def update_provider_server(
         self, server: ProviderServer, *, expected_updated_at, audit: AuditEvent
     ) -> ProviderServer:
         """Store every field of *server* except ``name`` (immutable)."""
+
+    @abstractmethod
+    async def delete_provider_server(
+        self,
+        server_id: UUID,
+        *,
+        expected_updated_at,
+        expected_models: dict[UUID, datetime],
+        audit: list[AuditEvent],
+    ) -> None:
+        """Hard-delete the server, its models and their access requests, retire
+        the server's name and store *audit* — all in one transaction.
+
+        Optimistic concurrency covers the server and its models:
+        ``StaleWriteError`` (nothing deleted) unless the server's
+        ``updated_at`` is *expected_updated_at* and its models are exactly
+        *expected_models* (id → ``updated_at``). Whether the models may be
+        deleted is the caller's decision; this check makes sure the decision
+        was taken on the state that is deleted.
+
+        A retired name is never accepted again by ``create_provider_server``
+        (``RegistryConflictError``): it prefixes process ids, model-access roles
+        and job history, which must not pass to an unrelated server.
+        """
 
     # --- models -----------------------------------------------------------
 

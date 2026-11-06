@@ -5,6 +5,8 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.html).
 # [3.x]
 ## [Unreleased]
+### Added:
+- `DELETE /registry/v1/servers/{id}`: owners and platform admins can hard-delete a provider server with its models and their access requests while every model is `draft`, `deactivated` or `rejected`; the server name is retired (migration 0006)
 ### Fixed:
 - `GET /jobs` no longer lists anonymous jobs while auth is enabled: unauthenticated callers get an empty list, authenticated users only their own jobs. Anonymous jobs remain reachable by their job ID (#24)
 
