@@ -481,7 +481,7 @@ Two layers, both evaluated in the core:
 | Pick up / decide review, verify, publish, reset | `verifier` | caller is **not** owner |
 | Deactivate model | `verifier` or `platform-admin` | — |
 | Transfer ownership, edit any server | `platform-admin` | — |
-| Read audit log | `verifier`, `access-admin` or `platform-admin` | — |
+| Read audit log | `platform-admin` (issue #35; before: also `verifier`, `access-admin`) | — |
 | Browse catalogue / model cards | anyone if `UMP_PUBLIC_PROCESSES=true`, else `viewer` (or `user`, composite) — D10 | published models only, unless owner/verifier |
 | Execute | see [Execution rules](#execution-rules) | `ProcessConfig.state` (no DB lookup) |
 
@@ -918,7 +918,7 @@ Delivery phases: **A** read + identity (`/me`, `/models`, `/servers`, `/roles/vo
 | `POST` | `/models/{id}/reverify` | `verifier`, not owner |
 | `PATCH` | `/models/{id}/owner` | `platform-admin` |
 | `GET` | `/models/{id}/interface` — state + diff to the verified interface | owner, `verifier` |
-| `GET` | `/audit` | `verifier`, `access-admin`, `platform-admin` |
+| `GET` | `/audit` | `platform-admin` |
 | `GET` | `/roles/vocabulary` — valid model-access role names | `access-admin`, `verifier` (used by F11 and D8) |
 | `POST` | `/models/{id}/access-requests` (phase E1) | authenticated, see [Access requests](#access-requests-phase-e1) |
 | `POST` | `/models/{id}/access-grants` (phase E1) — record a matrix grant | `access-admin` (via Nitro) |
@@ -1122,7 +1122,7 @@ drift check and `AuditObserver`.
   repository transaction; the port is for events without a registry change (jobs) and for
   reads. `AuditLogRecord` moved to `adapters/audit_log_sql.py`. The in-memory registry
   repository appends to an injected `InMemoryAuditLog`, so `/audit` works without a database.
-- `GET /audit` (`verifier`, `access-admin`, `platform-admin`): newest first, filters
+- `GET /audit` (`platform-admin`; issue #35): newest first, filters
   `model_id`, `actor`, `action`, `job_id`, `since` (incl.), `until` (excl.); cursor = last id.
 - `AuditObserver` records `job.execute` (on create) and `job.complete` (terminal;
   `outcome = failure` only for `failed`). `actor_roles` is empty — a job carries no token —

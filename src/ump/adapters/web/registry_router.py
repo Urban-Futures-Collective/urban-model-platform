@@ -542,7 +542,7 @@ def create_registry_router(
     @router.get(
         "/audit",
         response_model=AuditPage,
-        summary="Audit log, newest first (verifier, access-admin, platform-admin)",
+        summary="Audit log, newest first (platform-admin)",
     )
     async def audit(
         request: Request,

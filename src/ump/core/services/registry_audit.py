@@ -1,6 +1,8 @@
 """RegistryAuditService — reading the audit log (REF-F12 phase D).
 
-For ``verifier``, ``access-admin`` and ``platform-admin`` ("Authorization").
+For ``platform-admin`` only ("Authorization"; verifiers and access admins
+lost access with issue #35).
+
 Newest first, keyset-paginated by event id. The log holds three months
 (D11); older events are gone once retention has run.
 """
@@ -18,7 +20,7 @@ from ump.core.services.authorization import AuthorizationService
 from ump.core.services.registry_common import problem
 
 MAX_PAGE_SIZE = 200
-AUDIT_READERS = (roles.VERIFIER, roles.ACCESS_ADMIN, roles.PLATFORM_ADMIN)
+AUDIT_READERS = (roles.PLATFORM_ADMIN,)
 
 
 class RegistryAuditService:
