@@ -255,11 +255,12 @@ def test_audit_readers_and_filters():
     env = Env()
     with TestClient(env.app) as client:
         assert client.get("/registry/v1/audit").status_code == 401
-        for who in ("owner", "viewer"):
-            assert client.get("/registry/v1/audit", headers=_as(who)).status_code == 403
-        for who in ("verifier", "access", "admin"):
+        # platform-admin only (issue #35)
+        for who in ("owner", "viewer", "verifier", "access"):
             r = client.get("/registry/v1/audit", headers=_as(who))
-            assert r.status_code == 200, (who, r.text)
+            assert r.status_code == 403, (who, r.text)
+        r = client.get("/registry/v1/audit", headers=_as("admin"))
+        assert r.status_code == 200, r.text
         events = r.json()["events"]
         assert [e["action"] for e in events] == ["test.seed", "test.seed"]
         assert events[0]["id"] > events[1]["id"]  # newest first
