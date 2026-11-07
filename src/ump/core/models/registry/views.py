@@ -63,6 +63,10 @@ class ModelCardView(BaseModel):
     status: str
     # process_config "anonymous-access": runnable without a model-access role
     anonymous_access: bool = False
+    # The stored execution settings (providers.yaml keys), for the same audience
+    # as ``review``; None for everybody else. PATCH replaces process_config as a
+    # whole, so a client edits this object and sends all of it back.
+    process_config: dict[str, Any] | None = None
     exec_state: str | None = None
     interface_state: str
     published_at: datetime | None = None

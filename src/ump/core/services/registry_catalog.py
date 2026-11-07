@@ -237,6 +237,7 @@ class RegistryCatalogService:
                 for item in items
             ]
 
+        sees_review = self._sees_review(auth, model)
         review = (
             ReviewInfo(
                 status_note=model.status_note,
@@ -246,7 +247,7 @@ class RegistryCatalogService:
                 verified_at=model.verified_at,
                 verification_job_id=model.verification_job_id,
             )
-            if self._sees_review(auth, model)
+            if sees_review
             else None
         )
         return ModelCardView(
@@ -277,6 +278,7 @@ class RegistryCatalogService:
             io_notes={k: text(v) for k, v in model.io_notes.items()},
             status=model.status,
             anonymous_access=bool(model.process_config.get("anonymous-access")),
+            process_config=dict(model.process_config) if sees_review else None,
             exec_state=model.exec_state,
             interface_state=model.interface_state,
             published_at=model.published_at,

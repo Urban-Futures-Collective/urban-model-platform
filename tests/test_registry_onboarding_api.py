@@ -634,6 +634,52 @@ def test_owner_edits_card_with_full_replacement_and_audit_diff():
         }
 
 
+def test_process_config_round_trip_keeps_other_settings():
+    # issue #38: read the stored settings, change one key, send all of it back
+    client, repo, *_ = _setup()
+    with client:
+        model_id, etag = _draft(client)
+        settings = {
+            "anonymous-access": False,
+            "deterministic": True,
+            "result-storage": "geoserver",
+            "result-path": "result.features",
+            "poll-interval": 5,
+        }
+        first = _call(
+            client,
+            "PATCH",
+            f"/models/{model_id}",
+            "owner",
+            etag,
+            json={"process_config": settings},
+        )
+        assert first.status_code == 200, first.text
+
+        read = _call(client, "GET", f"/models/{model_id}", "owner")
+        config = read.json()["process_config"]
+        assert config == next(iter(repo.models.values())).process_config
+        config["anonymous-access"] = True
+
+        second = _call(
+            client,
+            "PATCH",
+            f"/models/{model_id}",
+            "owner",
+            read.headers["ETag"],
+            json={"process_config": config},
+        )
+        assert second.status_code == 200, second.text
+        assert second.json()["process_config"] == config
+        assert next(iter(repo.models.values())).process_config == {
+            "anonymous-access": True,
+            "deterministic": True,
+            "result-storage": "geoserver",
+            "result-path": "result.features",
+            "poll-interval": 5.0,
+        }
+
+
 @pytest.mark.parametrize(
     "patch, status",
     [

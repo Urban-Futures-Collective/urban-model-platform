@@ -342,6 +342,18 @@ def test_review_details_only_for_owner_verifier_admin():
             assert review["status_note"] == "looks fine"
 
 
+def test_process_config_only_for_owner_verifier_admin():
+    # issue #38: the editor needs the stored settings to send them back whole
+    client, _, seeded = _client(public=True)
+    pub = seeded["pub"].id
+    with client:
+        assert _get(client, f"/models/{pub}").json()["process_config"] is None
+        assert _get(client, f"/models/{pub}", "viewer").json()["process_config"] is None
+        for who in ("owner", "verifier", "admin"):
+            body = _get(client, f"/models/{pub}", who).json()
+            assert body["process_config"] == {"anonymous-access": True}
+
+
 # --- servers ------------------------------------------------------------------
 
 
